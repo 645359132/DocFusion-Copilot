@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from functools import lru_cache
+from pathlib import Path
+
+
+def _workspace_root() -> Path:
+    """根据当前文件位置解析仓库根目录。
+    Resolve the repository root from the current file location.
+    """
+    return Path(__file__).resolve().parents[3]
+
+
+@dataclass(slots=True)
+class Settings:
+    """MVP 后端运行时配置集合。
+    Central runtime settings for the MVP backend.
+    """
+
+    project_name: str = "DocFusion Copilot Backend"
+    api_prefix: str = "/api/v1"
+    workspace_root: Path = field(default_factory=_workspace_root)
+    max_workers: int = 4
+
+    @property
+    def backend_dir(self) -> Path:
+        """返回仓库中的 backend 目录。
+        Return the backend directory inside the repository.
+        """
+        return self.workspace_root / "backend"
+
+    @property
+    def data_dir(self) -> Path:
+        """返回项目共享的 data 目录。
+        Return the shared project data directory.
+        """
+        return self.workspace_root / "data"
+
+    @property
+    def storage_dir(self) -> Path:
+        """返回后端运行时产物可写入的存储目录。
+        Return the writable runtime storage directory for backend artifacts.
+        """
+        return self.backend_dir / "storage"
+
+    @property
+    def uploads_dir(self) -> Path:
+        """返回用于保存上传源文档的目录。
+        Return the directory used to store uploaded source documents.
+        """
+        return self.storage_dir / "uploads"
+
+    @property
+    def outputs_dir(self) -> Path:
+        """返回用于保存生成模板结果的目录。
+        Return the directory used to store generated template outputs.
+        """
+        return self.storage_dir / "outputs"
+
+    @property
+    def temp_dir(self) -> Path:
+        """返回用于暂存模板文件的目录。
+        Return the directory used for transient template files.
+        """
+        return self.storage_dir / "temp"
+
+    @property
+    def supported_document_extensions(self) -> tuple[str, ...]:
+        """返回允许上传的源文档扩展名列表。
+        Return allowed extensions for source documents.
+        """
+        return (".docx", ".md", ".txt", ".xlsx")
+
+    @property
+    def supported_template_extensions(self) -> tuple[str, ...]:
+        """返回允许回填的模板扩展名列表。
+        Return allowed extensions for fillable templates.
+        """
+        return (".xlsx", ".docx")
+
+    def ensure_directories(self) -> None:
+        """确保后端运行所需目录全部存在。
+        Create all backend runtime directories if they do not exist yet.
+        """
+        for directory in (self.backend_dir, self.storage_dir, self.uploads_dir, self.outputs_dir, self.temp_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+
+
+@lru_cache(maxsize=1)
+def get_settings() -> Settings:
+    """返回带目录初始化的缓存配置对象。
+    Return a cached settings object with directories prepared.
+    """
+    settings = Settings()
+    settings.ensure_directories()
+    return settings

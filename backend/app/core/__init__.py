@@ -1,1 +1,3 @@
-"""Core configuration package."""
+"""核心配置包。
+Core configuration package.
+"""

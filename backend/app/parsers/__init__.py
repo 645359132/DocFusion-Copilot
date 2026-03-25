@@ -1,1 +1,3 @@
-"""Parser package."""
+"""解析器包。
+Parser package.
+"""

@@ -1,1 +1,3 @@
-"""API package."""
+"""API 包。
+API package.
+"""

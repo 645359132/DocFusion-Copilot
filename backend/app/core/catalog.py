@@ -1,0 +1,122 @@
+from __future__ import annotations
+
+from collections.abc import Iterable
+
+
+FIELD_ALIASES: dict[str, tuple[str, ...]] = {
+    "GDP总量": (
+        "gdp总量",
+        "gdp",
+        "地区生产总值",
+        "生产总值",
+        "经济总量",
+    ),
+    "常住人口": (
+        "常住人口",
+        "人口规模",
+        "人口数",
+    ),
+    "人均GDP": (
+        "人均gdp",
+        "人均地区生产总值",
+        "人均生产总值",
+    ),
+    "一般公共预算收入": (
+        "一般公共预算收入",
+        "公共预算收入",
+        "一般预算收入",
+        "财政收入",
+    ),
+    "合同金额": (
+        "合同金额",
+        "合同价款",
+        "签约金额",
+        "总金额",
+    ),
+    "签订日期": (
+        "签订日期",
+        "签约日期",
+        "合同日期",
+        "日期",
+    ),
+    "甲方": (
+        "甲方",
+        "采购方",
+        "委托方",
+    ),
+    "乙方": (
+        "乙方",
+        "供应商",
+        "承接方",
+        "服务方",
+    ),
+}
+
+FIELD_CANONICAL_UNITS: dict[str, str] = {
+    "GDP总量": "亿元",
+    "常住人口": "万人",
+    "人均GDP": "元",
+    "一般公共预算收入": "亿元",
+    "合同金额": "元",
+}
+
+FIELD_ENTITY_TYPES: dict[str, str] = {
+    "GDP总量": "city",
+    "常住人口": "city",
+    "人均GDP": "city",
+    "一般公共预算收入": "city",
+    "合同金额": "contract",
+    "签订日期": "contract",
+    "甲方": "contract",
+    "乙方": "contract",
+}
+
+ENTITY_COLUMN_ALIASES: tuple[str, ...] = (
+    "城市",
+    "城市名称",
+    "地区",
+    "名称",
+    "项目",
+    "实体",
+    "公司",
+)
+
+CITY_NAMES: tuple[str, ...] = (
+    "北京",
+    "上海",
+    "天津",
+    "重庆",
+    "广州",
+    "深圳",
+    "杭州",
+    "南京",
+    "苏州",
+    "成都",
+    "武汉",
+    "西安",
+    "长沙",
+    "郑州",
+    "青岛",
+    "宁波",
+    "佛山",
+    "东莞",
+    "厦门",
+    "无锡",
+)
+
+INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
+    "extract_and_fill_template": ("模板", "填表", "回填", "填充"),
+    "extract_facts": ("提取", "抽取", "识别", "入库"),
+    "query_facts": ("查询", "汇总", "统计", "列出"),
+    "trace_fact": ("追溯", "来源", "证据"),
+}
+
+
+def iter_all_field_aliases() -> Iterable[tuple[str, str]]:
+    """遍历标准字段名及其全部别名。
+    Yield canonical field names paired with each supported alias.
+    """
+    for canonical_name, aliases in FIELD_ALIASES.items():
+        yield canonical_name, canonical_name
+        for alias in aliases:
+            yield canonical_name, alias

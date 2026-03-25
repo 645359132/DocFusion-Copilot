@@ -1,1 +1,3 @@
-"""Repository package."""
+"""仓储包。
+Repository package.
+"""
