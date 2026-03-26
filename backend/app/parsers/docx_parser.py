@@ -11,27 +11,25 @@ from app.utils.ids import new_id
 
 W_NS = "http://schemas.openxmlformats.org/wordprocessingml/2006/main"
 W = {"w": W_NS}
-_NUMBERED_HEADING_RE = re.compile(r"^(?:[一二三四五六七八九十]+[、.]|\d+(?:\.\d+)*)")
+_NUMBERED_HEADING_RE = re.compile(
+    r"^(?:[一二三四五六七八九十]+[、.．]|\d{1,2}(?:\.\d{1,2}){0,2}[、.．])\s*\S+"
+)
 
 
 def _w(tag: str) -> str:
-    """为 WordprocessingML 标签补齐命名空间。
-    Qualify a WordprocessingML tag with its namespace.
-    """
+    """为 WordprocessingML 标签补齐命名空间。    Qualify a WordprocessingML tag with its namespace."""
+
     return f"{{{W_NS}}}{tag}"
 
 
 class DocxParser(DocumentParser):
-    """将 DOCX 文件解析为标题、段落和表格行文档块。
-    Parse DOCX files into heading, paragraph and table-row blocks.
-    """
+    """将 DOCX 文档解析为标题、段落和表格行文档块。    Parse DOCX files into heading, paragraph and table-row blocks."""
 
     supported_suffixes = (".docx",)
 
     def parse(self, path: Path, doc_id: str) -> list[DocumentBlock]:
-        """通过 XML 解析从 DOCX 文档中提取逻辑块。
-        Extract logical blocks from a DOCX document using XML inspection.
-        """
+        """通过 XML 检查从 DOCX 中提取逻辑块。    Extract logical blocks from a DOCX document using XML inspection."""
+
         blocks: list[DocumentBlock] = []
         section_path: list[str] = []
         index = 0
@@ -119,9 +117,8 @@ class DocxParser(DocumentParser):
 
 
 def _infer_heading_level(paragraph_el: ET.Element, text: str) -> int | None:
-    """根据段落样式或编号模式推断标题层级。
-    Infer a heading level from paragraph style metadata or numbering patterns.
-    """
+    """根据段落样式或编号模式推断标题层级。    Infer a heading level from paragraph style metadata or numbering patterns."""
+
     style_el = paragraph_el.find("w:pPr/w:pStyle", W)
     if style_el is not None:
         style_name = style_el.get(f"{{{W_NS}}}val", "")
@@ -132,7 +129,8 @@ def _infer_heading_level(paragraph_el: ET.Element, text: str) -> int | None:
             return 1
 
     if _NUMBERED_HEADING_RE.match(text):
-        if "." in text[:6]:
-            return min(text.count(".") + 1, 4)
+        prefix = text.split(maxsplit=1)[0]
+        if prefix[0].isdigit():
+            return min(prefix.rstrip("、.．").count(".") + 1, 4)
         return 1
     return None

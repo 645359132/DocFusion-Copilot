@@ -109,13 +109,15 @@ INTENT_KEYWORDS: dict[str, tuple[str, ...]] = {
     "extract_facts": ("提取", "抽取", "识别", "入库"),
     "query_facts": ("查询", "汇总", "统计", "列出"),
     "trace_fact": ("追溯", "来源", "证据"),
+    "edit_document": ("编辑", "修改", "替换", "改成", "改为"),
+    "summarize_document": ("摘要", "总结", "概述"),
+    "reformat_document": ("排版", "格式", "整理", "规范", "重排", "清理"),
 }
 
 
 def iter_all_field_aliases() -> Iterable[tuple[str, str]]:
-    """遍历标准字段名及其全部别名。
-    Yield canonical field names paired with each supported alias.
-    """
+    """遍历标准字段名及其全部别名。    Yield canonical field names paired with each supported alias."""
+
     for canonical_name, aliases in FIELD_ALIASES.items():
         yield canonical_name, canonical_name
         for alias in aliases:

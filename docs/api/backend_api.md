@@ -1,327 +1,245 @@
 # DocFusion Copilot Backend API
 
-本文档描述当前比赛版 MVP 后端已经实现的接口，基于代码中的实际行为整理，适合作为联调和演示参考。
+API 前缀：`/api/v1`
 
-## 基本信息
+健康检查：`GET /health`
 
-- 服务名称：`DocFusion Copilot Backend`
-- 默认前缀：`/api/v1`
-- 健康检查：`GET /health`
-- 默认返回格式：`application/json`
+当前后端支持：
 
-## 状态约定
+- 非结构化文档上传与异步解析
+- facts 抽取、查询、复核、追溯
+- 批次化文档管理
+- `xlsx / docx` 模板自动回填
+- 模板到文档的自动匹配
+- 自然语言文档操作
+- 准确率与耗时评测
 
-### 文档状态
-
-- `uploaded`
-- `parsing`
-- `parsed`
-- `failed`
-
-### 任务状态
-
-- `queued`
-- `running`
-- `succeeded`
-- `failed`
-
-### 任务类型
-
-- `parse_document`
-- `fill_template`
-
-## 1. 上传文档
+## 1. 上传单个文档
 
 `POST /api/v1/documents/upload`
 
-### 说明
+表单字段：
 
-上传一个源文档，并异步触发解析与事实抽取。
+- `file`
+- `document_set_id`，可选
 
-### 支持格式
+说明：
 
-- `.docx`
-- `.md`
-- `.txt`
-- `.xlsx`
+- 上传后立即返回任务 id
+- 若提供 `document_set_id`，该文档会归入对应批次
 
-### 请求
+## 2. 批量上传文档
 
-- `Content-Type: multipart/form-data`
-- 表单字段：`file`
+`POST /api/v1/documents/upload-batch`
 
-### 响应示例
+表单字段：
 
-```json
-{
-  "task_id": "task_1234567890ab",
-  "status": "queued",
-  "document": {
-    "doc_id": "doc_1234567890ab",
-    "file_name": "city_report.txt",
-    "stored_path": "D:/YOUR_CODE/DocFusion-Copilot/backend/storage/uploads/doc_xxx_city_report.txt",
-    "doc_type": "txt",
-    "upload_time": "2026-03-25T12:00:00Z",
-    "status": "uploaded",
-    "metadata": {}
-  }
-}
-```
+- `files`
+- `document_set_id`，可选
 
-### 错误
+说明：
 
-- `400 Bad Request`
-  文件名缺失或扩展名不被支持
+- 不传 `document_set_id` 时，后端会自动生成一个批次 id
+- 适合赛题中的“先上传整批文档”
 
-## 2. 查询文档列表
+## 3. 查询文档列表
 
 `GET /api/v1/documents`
 
-### 说明
+## 4. 查询单个文档
 
-返回当前后端内存仓储中的全部文档。
+`GET /api/v1/documents/{doc_id}`
 
-### 响应示例
+## 5. 查询解析块
 
-```json
-[
-  {
-    "doc_id": "doc_1234567890ab",
-    "file_name": "city_report.txt",
-    "stored_path": "D:/YOUR_CODE/DocFusion-Copilot/backend/storage/uploads/doc_xxx_city_report.txt",
-    "doc_type": "txt",
-    "upload_time": "2026-03-25T12:00:00Z",
-    "status": "parsed",
-    "metadata": {
-      "block_count": 3,
-      "fact_count": 4
-    }
-  }
-]
-```
+`GET /api/v1/documents/{doc_id}/blocks`
 
-## 3. 查询任务状态
+## 6. 查询文档 facts
+
+`GET /api/v1/documents/{doc_id}/facts`
+
+查询参数：
+
+- `canonical_only`
+- `status`
+- `min_confidence`
+
+## 7. 查询任务状态
 
 `GET /api/v1/tasks/{task_id}`
 
-### 说明
+说明：
 
-查询异步任务当前状态，适用于文档解析和模板回填两个流程。
+- 文档解析、模板回填、事实评测、模板基准测试都走异步任务
+- 普通模板回填完成后，`result` 中会包含：
+  - `matched_document_ids`
+  - `match_mode`
+  - `match_reason`
+  - `elapsed_seconds`
+  - `filled_cells`
+  - `output_file_name`
 
-### 响应示例
+## 8. 查询 facts
+
+`GET /api/v1/facts`
+
+查询参数：
+
+- `entity_name`
+- `field_name`
+- `status`
+- `min_confidence`
+- `canonical_only`
+- `document_ids`
+
+## 9. 人工复核 fact
+
+`PATCH /api/v1/facts/{fact_id}/review`
+
+请求示例：
 
 ```json
 {
-  "task_id": "task_1234567890ab",
-  "task_type": "parse_document",
-  "status": "succeeded",
-  "created_at": "2026-03-25T12:00:00Z",
-  "updated_at": "2026-03-25T12:00:02Z",
-  "progress": 1.0,
-  "message": "Document parsed successfully.",
-  "error": null,
-  "result": {
-    "document_id": "doc_1234567890ab",
-    "block_count": 3,
-    "fact_count": 4
-  }
+  "status": "rejected",
+  "reviewer": "tester",
+  "note": "manual validation failed"
 }
 ```
 
-### 错误
+## 10. 查询 fact 追溯
 
-- `404 Not Found`
-  任务不存在
+`GET /api/v1/facts/{fact_id}/trace`
 
-## 4. 上传模板并执行回填
+## 11. 提交模板回填任务
 
 `POST /api/v1/templates/fill`
 
-### 说明
+表单字段：
 
-上传一个模板文件并异步触发回填。当前 MVP 优先支持 `xlsx` 模板。
+- `template_file`
+- `document_set_id`，可选，默认 `default`
+- `fill_mode`，默认 `canonical`
+- `document_ids`，可选，逗号分隔
+- `auto_match`，默认 `true`
 
-### 支持格式
+说明：
+
+- 若传 `document_ids`，后端只使用这些文档
+- 若不传 `document_ids` 且传了 `document_set_id`，后端会先在该批次内选文档
+- 若 `auto_match=true`，后端会读取模板名称、表头、实体列和内容提示，自动筛选最相关文档
+- 若配置了 OpenAI-compatible，模板匹配会优先尝试语义匹配，否则走规则匹配
+
+## 12. 下载回填结果
+
+`GET /api/v1/templates/result/{task_id}`
+
+返回文件类型：
 
 - `.xlsx`
 - `.docx`
 
-当前实现中：
-
-- `.xlsx` 已支持实际回填
-- `.docx` 会被接受为可支持类型，但当前填充逻辑尚未实现
-
-### 请求
-
-- `Content-Type: multipart/form-data`
-- 表单字段：
-  - `template_file`
-  - `document_set_id`
-  - `fill_mode`
-  - `document_ids`
-
-### 字段说明
-
-- `document_set_id`
-  用于选择文档集合
-  默认值为 `default`
-- `fill_mode`
-  当前建议使用 `canonical`
-- `document_ids`
-  逗号分隔的文档 id 列表
-  例如：`doc_a,doc_b`
-
-### 响应示例
-
-```json
-{
-  "task_id": "task_abcd1234ef56",
-  "status": "queued",
-  "template_name": "city_template.xlsx"
-}
-```
-
-### 错误
-
-- `400 Bad Request`
-  模板文件名缺失或扩展名不支持
-
-## 5. 下载回填结果
-
-`GET /api/v1/templates/result/{task_id}`
-
-### 说明
-
-下载模板回填后的结果文件。
-
-### 成功响应
-
-- `200 OK`
-- 文件类型：
-  `application/vnd.openxmlformats-officedocument.spreadsheetml.sheet`
-
-### 错误
-
-- `404 Not Found`
-  对应任务尚未生成结果文件
-
-## 6. 轻量 Agent 指令解析
+## 13. 自然语言规划
 
 `POST /api/v1/agent/chat`
 
-### 说明
+作用：
 
-该接口不是完整大模型对话，而是一个规则版意图解析器，用于将自然语言请求转成结构化计划，并预览可命中的事实。
+- 将自然语言请求解析为结构化意图
+- 已支持的意图包括事实查询、文档摘要、编辑、格式整理、模板回填规划等
 
-### 请求示例
+## 14. 自然语言执行
 
-```json
-{
-  "message": "提取所有城市的GDP并生成汇总表",
-  "context_id": "proj_001"
-}
+`POST /api/v1/agent/execute`
+
+支持两种请求方式：
+
+- `application/json`
+- `multipart/form-data`
+
+当前支持：
+
+- 事实查询
+- 文档摘要
+- 文本文档和 `docx` 的基础排版整理
+- 文本文档和 `docx` 的文本替换编辑
+- 通过 `multipart/form-data` 携带 `template_file` 直接提交模板回填任务
+
+当使用 `multipart/form-data` 时，可传字段：
+
+- `message`
+- `context_id`
+- `document_ids`
+- `document_set_id`
+- `fill_mode`
+- `auto_match`
+- `template_file`
+
+当携带 `template_file` 时，返回体会额外包含：
+
+- `task_id`
+- `task_status`
+- `template_name`
+
+## 15. 下载自然语言执行产物
+
+`GET /api/v1/agent/artifacts/{file_name}`
+
+## 16. 事实评测
+
+`POST /api/v1/benchmarks/facts/evaluate`
+
+表单字段：
+
+- `annotation_file`
+- `document_ids`
+- `canonical_only`
+- `min_confidence`
+
+返回指标：
+
+- `accuracy`
+- `precision`
+- `recall`
+- `f1`
+- `per_field`
+- `mismatches`
+- `elapsed_seconds`
+
+## 17. 模板基准测试
+
+`POST /api/v1/benchmarks/templates/fill`
+
+表单字段：
+
+- `template_file`
+- `expected_result_file`
+- `document_set_id`
+- `fill_mode`
+- `document_ids`
+
+返回指标：
+
+- `accuracy`
+- `matched_cells`
+- `total_compared_cells`
+- `elapsed_seconds`
+- `mismatches`
+
+## 18. 读取评测报告
+
+`GET /api/v1/benchmarks/reports/{task_id}`
+
+## OpenAI-compatible 环境变量模板
+
+```bash
+DOCFUSION_OPENAI_API_KEY=your_api_key
+DOCFUSION_OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
+DOCFUSION_OPENAI_MODEL=gpt-4o-mini
+DOCFUSION_OPENAI_TIMEOUT_SECONDS=45
 ```
 
-### 响应示例
+## 当前实现边界
 
-```json
-{
-  "intent": "query_facts",
-  "entities": ["城市"],
-  "fields": ["GDP总量"],
-  "target": "fact_store",
-  "need_db_store": false,
-  "context_id": "proj_001",
-  "preview": [
-    {
-      "fact_id": "fact_sh_gdp",
-      "entity_name": "上海",
-      "field_name": "GDP总量",
-      "value_num": 56708.71,
-      "value_text": "56,708.71",
-      "unit": "亿元",
-      "year": 2025,
-      "confidence": 0.98
-    }
-  ]
-}
-```
-
-## 7. Fact 来源追溯
-
-`GET /api/v1/facts/{fact_id}/trace`
-
-### 说明
-
-返回某个事实的来源文档、来源块，以及它被哪些模板结果使用过。
-
-### 响应示例
-
-```json
-{
-  "fact": {
-    "fact_id": "fact_sh_gdp",
-    "entity_type": "city",
-    "entity_name": "上海",
-    "field_name": "GDP总量",
-    "value_num": 56708.71,
-    "value_text": "56,708.71",
-    "unit": "亿元",
-    "year": 2025,
-    "source_doc_id": "doc_seed",
-    "source_block_id": "blk_1",
-    "source_span": "上海GDP总量56,708.71亿元",
-    "confidence": 0.98,
-    "conflict_group_id": "city::上海::GDP总量::2025::亿元",
-    "is_canonical": true,
-    "status": "confirmed",
-    "metadata": {}
-  },
-  "document": {
-    "doc_id": "doc_seed",
-    "file_name": "seed.txt",
-    "stored_path": "seed.txt",
-    "doc_type": "txt",
-    "upload_time": "2026-03-25T12:00:00Z",
-    "status": "parsed",
-    "metadata": {}
-  },
-  "block": null,
-  "usages": [
-    {
-      "task_id": "task_abcd1234ef56",
-      "output_file_name": "task_abcd1234ef56_city_template.xlsx",
-      "sheet_name": "Sheet1",
-      "cell_ref": "B2"
-    }
-  ]
-}
-```
-
-### 错误
-
-- `404 Not Found`
-  事实不存在
-
-## 8. 健康检查
-
-`GET /health`
-
-### 说明
-
-用于确认服务进程是否成功启动。
-
-### 响应示例
-
-```json
-{
-  "status": "ok"
-}
-```
-
-## 9. 当前实现说明
-
-- 当前仓储层为内存实现，服务重启后数据不会保留。
-- 当前异步机制使用线程池模拟，后续可替换为 `Celery + Redis`。
-- 当前模板填充以 `xlsx` 为主，`docx` 模板填充尚未落地。
-- 当前 `agent/chat` 为规则驱动，不依赖外部 LLM。
+- OCR 扫描件未接入
+- 正式消息队列未接入
+- 自然语言执行已支持模板文件上传，但回填结果仍通过异步任务下载链路获取

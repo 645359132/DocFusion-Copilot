@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from functools import lru_cache
 from pathlib import Path
@@ -22,6 +23,24 @@ class Settings:
     api_prefix: str = "/api/v1"
     workspace_root: Path = field(default_factory=_workspace_root)
     max_workers: int = 4
+    database_url: str = field(
+        default_factory=lambda: (
+            os.getenv("DOCFUSION_DATABASE_URL")
+            or os.getenv("DATABASE_URL")
+            or "postgresql+psycopg://postgres:postgres@localhost:5432/docfusion_copilot"
+        )
+    )
+    database_echo: bool = field(
+        default_factory=lambda: (
+            os.getenv("DOCFUSION_DATABASE_ECHO", "").strip().lower() in {"1", "true", "yes", "on"}
+        )
+    )
+    openai_api_key: str = field(default_factory=lambda: os.getenv("DOCFUSION_OPENAI_API_KEY", ""))
+    openai_base_url: str = field(default_factory=lambda: os.getenv("DOCFUSION_OPENAI_BASE_URL", ""))
+    openai_model: str = field(default_factory=lambda: os.getenv("DOCFUSION_OPENAI_MODEL", "gpt-4o-mini"))
+    openai_timeout_seconds: float = field(
+        default_factory=lambda: float(os.getenv("DOCFUSION_OPENAI_TIMEOUT_SECONDS", "45"))
+    )
 
     @property
     def backend_dir(self) -> Path:

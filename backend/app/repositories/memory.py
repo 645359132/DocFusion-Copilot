@@ -154,6 +154,8 @@ class InMemoryRepository:
         *,
         entity_name: str | None = None,
         field_name: str | None = None,
+        status: str | None = None,
+        min_confidence: float | None = None,
         canonical_only: bool = False,
         document_ids: set[str] | None = None,
     ) -> list[FactRecord]:
@@ -166,6 +168,10 @@ class InMemoryRepository:
                 facts = [fact for fact in facts if fact.entity_name == entity_name]
             if field_name is not None:
                 facts = [fact for fact in facts if fact.field_name == field_name]
+            if status is not None:
+                facts = [fact for fact in facts if fact.status == status]
+            if min_confidence is not None:
+                facts = [fact for fact in facts if fact.confidence >= min_confidence]
             if canonical_only:
                 facts = [fact for fact in facts if fact.is_canonical]
             if document_ids is not None:
@@ -179,6 +185,26 @@ class InMemoryRepository:
         with self._lock:
             fact = self._facts.get(fact_id)
             return replace(fact) if fact else None
+
+    def update_fact(
+        self,
+        fact_id: str,
+        *,
+        status: str | None = None,
+        metadata_updates: dict[str, object] | None = None,
+    ) -> FactRecord | None:
+        """更新事实状态或元数据并刷新 canonical 标记。    Update one fact and refresh canonical selection."""
+
+        with self._lock:
+            fact = self._facts.get(fact_id)
+            if not fact:
+                return None
+            if status is not None:
+                fact.status = status
+            if metadata_updates:
+                fact.metadata.update(metadata_updates)
+            self._recompute_canonical_flags()
+            return replace(fact)
 
     def get_fact_block(self, fact_id: str) -> DocumentBlock | None:
         """返回与事实关联的来源文档块。
@@ -228,13 +254,15 @@ class InMemoryRepository:
 
         for group_key, facts in grouped.items():
             ordered = sorted(
-                facts,
+                (fact for fact in facts if fact.status != "rejected"),
                 key=lambda item: (item.confidence, 1 if item.value_num is not None else 0, item.source_doc_id),
                 reverse=True,
             )
             conflict_group_id = (
                 f"{group_key[0]}::{group_key[1]}::{group_key[2]}::{group_key[3]}::{group_key[4]}"
             )
+            for fact in facts:
+                fact.is_canonical = False
+                fact.conflict_group_id = conflict_group_id
             for index, fact in enumerate(ordered):
                 fact.is_canonical = index == 0
-                fact.conflict_group_id = conflict_group_id
