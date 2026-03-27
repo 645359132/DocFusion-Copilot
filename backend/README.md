@@ -1,66 +1,118 @@
-# 后端
+# 后端说明
 
-这里放置 DocFusion Copilot 的后端实现，当前已补全为一个可运行的 MVP 骨架，覆盖以下链路：
+`DocFusion Copilot` 后端当前覆盖了赛题所要求的三条核心链路：
 
-- FastAPI API 入口
-- 文档上传与异步任务状态
-- `docx / md / txt / xlsx` 四类文档解析
-- 非结构化内容到 Fact 的轻量抽取
-- `xlsx` 模板自动回填
-- Fact 来源追溯
-- 简单规则版 `agent/chat` 指令解析
+- 文档智能操作交互：自然语言查询事实、摘要、基础排版整理、文本替换
+- 非结构化文档信息提取：上传 `docx / md / txt / xlsx` 后异步解析、抽取 facts、存入 PostgreSQL
+- 表格自定义数据填写：上传 `xlsx / docx` 模板后，自动匹配相关文档并完成回填
 
-## 目录说明
+当前版本额外补了几项对赛题评测很关键的能力：
+
+- `document_set_id` 批次隔离，支持“先上传整批文档，再逐个上传模板”
+- 模板到文档的自动匹配，优先规则匹配，配置 OpenAI-compatible 后可启用语义匹配
+- 普通模板回填任务记录 `elapsed_seconds`
+- `agent/execute` 同时支持 JSON 执行和 `multipart/form-data` 模板上传执行
+- 事实评测与模板基准测试
+- fact 追溯和人工复核
+
+## 目录
 
 - `app/main.py`
-  FastAPI 应用入口
+  FastAPI 入口
 - `app/api/v1`
-  对外 REST 接口
+  REST API
 - `app/core`
-  配置、服务容器、字典规则
+  配置、依赖容器、OpenAI-compatible 客户端模板
 - `app/parsers`
-  各类文档解析器
+  `docx / md / txt / xlsx` 解析器
 - `app/services`
-  上传解析、抽取、回填、追溯等业务逻辑
+  文档处理、事实抽取、模板匹配与回填、自然语言执行、评测
 - `app/repositories`
-  内存仓储实现
-- `app/tasks`
-  线程池形式的轻量异步执行器
+  PostgreSQL 仓储实现
 - `tests`
-  本地基础单元测试
+  核心业务回归测试
 
-## 已实现接口
+## 主要接口
 
 - `POST /api/v1/documents/upload`
+- `POST /api/v1/documents/upload-batch`
+- `GET /api/v1/documents`
+- `GET /api/v1/documents/{doc_id}`
+- `GET /api/v1/documents/{doc_id}/blocks`
+- `GET /api/v1/documents/{doc_id}/facts`
 - `GET /api/v1/tasks/{task_id}`
+- `GET /api/v1/facts`
+- `PATCH /api/v1/facts/{fact_id}/review`
+- `GET /api/v1/facts/{fact_id}/trace`
 - `POST /api/v1/templates/fill`
 - `GET /api/v1/templates/result/{task_id}`
 - `POST /api/v1/agent/chat`
-- `GET /api/v1/facts/{fact_id}/trace`
+- `POST /api/v1/agent/execute`
+- `GET /api/v1/agent/artifacts/{file_name}`
+- `POST /api/v1/benchmarks/facts/evaluate`
+- `POST /api/v1/benchmarks/templates/fill`
+- `GET /api/v1/benchmarks/reports/{task_id}`
 
-## 运行说明
+## 运行
 
-1. 安装依赖：
+1. 安装依赖
 
 ```bash
 pip install -r backend/requirements.txt
 ```
 
-2. 启动服务：
+2. 配置 PostgreSQL
+
+```bash
+DOCFUSION_DATABASE_URL=postgresql+psycopg://postgres:postgres@localhost:5432/docfusion_copilot
+DOCFUSION_DATABASE_ECHO=true
+```
+
+3. 可选配置 OpenAI-compatible
+
+```bash
+DOCFUSION_OPENAI_API_KEY=your_api_key
+DOCFUSION_OPENAI_BASE_URL=https://your-openai-compatible-endpoint/v1
+DOCFUSION_OPENAI_MODEL=gpt-4o-mini
+DOCFUSION_OPENAI_TIMEOUT_SECONDS=45
+```
+
+说明：
+
+- 不配置也可运行，系统会使用本地规则完成解析、匹配和回填
+- 配置后，`agent/chat`、文档摘要和模板文档匹配会优先尝试调用 OpenAI-compatible 接口
+- 仓库只保留接口模板，不内置真实 `api_key` 和 `base_url`
+
+4. 启动服务
 
 ```bash
 uvicorn app.main:app --app-dir backend --reload
 ```
 
-3. 运行测试：
+或
+
+```bash
+python backend/app/main.py
+```
+
+5. 运行测试
 
 ```bash
 python -m unittest discover backend/tests -v
 ```
 
-## 当前取舍
+## 赛题相关建议用法
 
-- 为了先打通比赛 MVP，仓储层先用内存实现，后续可替换为 PostgreSQL / pgvector。
-- 异步任务先用线程池模拟，后续可替换为 Celery + Redis。
-- 模板回填当前优先支持 `xlsx`，`docx` 模板保留扩展位。
-- `xlsx` 和 `docx` 解析尽量使用标准库，减少本地依赖门槛。
+1. 用 `POST /api/v1/documents/upload-batch` 一次上传一批文档，并给这批文档分配 `document_set_id`
+2. 轮询 `GET /api/v1/tasks/{task_id}`，确认文档解析完成
+3. 对每个模板调用 `POST /api/v1/templates/fill`
+4. 在模板请求中传同一个 `document_set_id`
+5. 轮询模板任务状态，读取 `result.elapsed_seconds`、`result.matched_document_ids`
+6. 用 `GET /api/v1/templates/result/{task_id}` 下载回填后的模板
+
+## 当前边界
+
+- 模板自动匹配已经可用，但仍以规则为主，OpenAI 语义匹配依赖你后续补充配置
+- `agent/execute` 已支持编辑、格式整理、摘要、事实查询，也支持携带 `template_file` 的自然语言回填入口
+- 目前异步执行是线程池，不是正式消息队列
+- OCR 扫描件仍未接入

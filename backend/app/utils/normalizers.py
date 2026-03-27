@@ -3,18 +3,13 @@ from __future__ import annotations
 import re
 from collections.abc import Iterable
 
-from app.core.catalog import (
-    CITY_NAMES,
-    ENTITY_COLUMN_ALIASES,
-    FIELD_ALIASES,
-    FIELD_CANONICAL_UNITS,
-)
+from app.core.catalog import CITY_NAMES, ENTITY_COLUMN_ALIASES, FIELD_ALIASES, FIELD_CANONICAL_UNITS
 
 _BRACKET_TEXT_RE = re.compile(r"[（(].*?[)）]")
 _WHITESPACE_RE = re.compile(r"\s+")
-_NUMERIC_RE = re.compile(r"(?P<value>-?\d[\d,]*(?:\.\d+)?)\s*(?P<unit>万亿元|亿元|亿|万元|元|万人|人|%)?")
-_YEAR_RE = re.compile(r"(?P<year>(?:19|20)\d{2})年?")
-_CITY_RE = re.compile(r"(?P<name>[\u4e00-\u9fff]{2,8}市)")
+_NUMERIC_RE = re.compile(r"(?P<value>-?\d[\d,]*(?:\.\d+)?)\s*(?P<unit>万亿元|亿元|万元|元|万人|人|%)?")
+_YEAR_RE = re.compile(r"(?P<year>(?:19|20)\d{2})年")
+_CITY_WITH_SUFFIX_RE = re.compile(r"(?P<name>[\u4e00-\u9fff]{2,4})市")
 
 _FIELD_ALIAS_LOOKUP: dict[str, str] = {}
 for canonical_name, aliases in FIELD_ALIASES.items():
@@ -30,16 +25,14 @@ _ENTITY_COLUMN_LOOKUP = {
 
 
 def strip_header_adornments(raw_value: str) -> str:
-    """移除表头字符串中的空白和括号提示信息。
-    Remove whitespace and bracketed hints from a header string.
-    """
+    """移除表头字符串中的空白和括号提示。    Remove whitespace and bracketed hints from a header string."""
+
     return _WHITESPACE_RE.sub("", _BRACKET_TEXT_RE.sub("", raw_value or "")).strip()
 
 
 def normalize_field_name(raw_value: str) -> str | None:
-    """将原始表头或别名映射为标准字段名。
-    Map a raw header or alias string to its canonical field name.
-    """
+    """将原始表头或别名映射为标准字段名。    Map a raw header or alias string to its canonical field name."""
+
     if not raw_value:
         return None
     candidate = strip_header_adornments(raw_value).lower()
@@ -47,16 +40,14 @@ def normalize_field_name(raw_value: str) -> str | None:
 
 
 def is_entity_column(raw_value: str) -> bool:
-    """判断某个表头是否可能表示实体列。
-    Return whether a header is likely describing the entity column.
-    """
+    """判断某个表头是否表示实体列。    Return whether a header is likely describing the entity column."""
+
     return strip_header_adornments(raw_value).lower() in _ENTITY_COLUMN_LOOKUP
 
 
 def normalize_entity_name(raw_value: str) -> str:
-    """标准化实体名称，便于跨文档和模板匹配。
-    Normalize entity text for matching across documents and templates.
-    """
+    """标准化实体名称，便于跨文档匹配。    Normalize entity text for cross-document matching."""
+
     candidate = re.sub(r"[\s:：\-_/]+", "", raw_value or "")
     if candidate.endswith("市") and len(candidate) > 2:
         candidate = candidate[:-1]
@@ -64,40 +55,38 @@ def normalize_entity_name(raw_value: str) -> str:
 
 
 def find_entity_mentions(text: str, extra_candidates: Iterable[str] | None = None) -> list[str]:
-    """返回文本片段中检测到的唯一实体提及。
-    Return unique entity mentions detected in a text snippet.
-    """
+    """返回文本片段中的唯一实体提及。    Return unique entity mentions detected in a text snippet."""
+
     candidates: list[str] = []
     seen: set[str] = set()
 
     def _push(name: str) -> None:
-        """在保持顺序的前提下插入一个标准化实体提及。
-        Insert one normalized entity mention while preserving order.
-        """
+        """按出现顺序追加一个规范化实体。    Append one normalized entity while preserving order."""
+
         normalized = normalize_entity_name(name)
         if normalized and normalized not in seen:
             seen.add(normalized)
             candidates.append(normalized)
 
     for city_name in CITY_NAMES:
-        if city_name in text:
+        if city_name in text or f"{city_name}市" in text:
             _push(city_name)
 
-    for match in _CITY_RE.finditer(text):
+    for match in _CITY_WITH_SUFFIX_RE.finditer(text):
         _push(match.group("name"))
 
     if extra_candidates:
         for candidate in extra_candidates:
-            if candidate and candidate in text:
-                _push(candidate)
+            normalized = normalize_entity_name(candidate)
+            if normalized and (normalized in text or f"{normalized}市" in text):
+                _push(normalized)
 
     return candidates
 
 
 def infer_year(text: str) -> int | None:
-    """推断文本中首次出现的四位年份。
-    Infer the first four-digit year mentioned in text.
-    """
+    """推断文本中首次出现的年份。    Infer the first four-digit year mentioned in text."""
+
     match = _YEAR_RE.search(text)
     if not match:
         return None
@@ -105,9 +94,8 @@ def infer_year(text: str) -> int | None:
 
 
 def extract_numeric_with_unit(raw_value: str) -> tuple[float | None, str | None]:
-    """从文本中提取一个数值和可选单位。
-    Extract one numeric value and optional unit from text.
-    """
+    """从文本中提取数值和单位。    Extract one numeric value and optional unit from text."""
+
     if not raw_value:
         return None, None
     match = _NUMERIC_RE.search(raw_value.replace("，", ","))
@@ -123,9 +111,8 @@ def convert_to_canonical_unit(
     value_num: float | None,
     unit: str | None,
 ) -> tuple[float | None, str | None]:
-    """将数值转换为字段配置的标准单位。
-    Convert a value into the canonical unit configured for a field.
-    """
+    """将数值转换为字段标准单位。    Convert a value into the canonical unit configured for a field."""
+
     if value_num is None:
         return None, FIELD_CANONICAL_UNITS.get(field_name, unit)
 
@@ -140,26 +127,29 @@ def convert_to_canonical_unit(
             return value_num / 10000, "亿元"
         if unit == "元":
             return value_num / 100000000, "亿元"
-        if unit == "亿":
+        if unit == "亿元":
             return value_num, "亿元"
 
     if field_name == "常住人口":
         if unit == "人":
             return value_num / 10000, "万人"
+        if unit == "万人":
+            return value_num, "万人"
 
     if field_name in {"人均GDP", "合同金额"}:
         if unit == "万元":
             return value_num * 10000, "元"
-        if unit in {"亿元", "亿"}:
+        if unit == "亿元":
             return value_num * 100000000, "元"
+        if unit == "元":
+            return value_num, "元"
 
     return value_num, canonical_unit
 
 
 def format_value(value: float | None) -> str:
-    """将数值格式化为紧凑的人类可读字符串。
-    Format a numeric value into a compact human-readable string.
-    """
+    """将数值格式化为紧凑字符串。    Format a numeric value into a compact human-readable string."""
+
     if value is None:
         return ""
     if float(value).is_integer():

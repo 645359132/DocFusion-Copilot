@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pydantic import Field
 
-from app.schemas.common import APIModel
+from app.schemas.common import APIModel, FactResponse
 
 
 class AgentChatRequest(APIModel):
@@ -15,8 +15,8 @@ class AgentChatRequest(APIModel):
 
 
 class AgentChatResponse(APIModel):
-    """代理接口返回的规则式规划结果。
-    Rule-based planning result returned by the agent endpoint.
+    """代理接口返回的结构化规划结果。
+    Structured planning result returned by the agent endpoint.
     """
 
     intent: str
@@ -26,3 +26,54 @@ class AgentChatResponse(APIModel):
     need_db_store: bool
     context_id: str | None
     preview: list[dict[str, object]]
+    edits: list[dict[str, str]]
+    planner: str
+
+
+class AgentExecuteRequest(APIModel):
+    """代理执行接口的输入载荷。
+    Input payload for the agent execution endpoint.
+    """
+
+    message: str = Field(min_length=1)
+    context_id: str | None = None
+    document_ids: list[str] = Field(default_factory=list)
+    document_set_id: str | None = None
+    fill_mode: str = "canonical"
+    auto_match: bool = True
+
+
+class AgentExecutionArtifactResponse(APIModel):
+    """代理执行产物的文件元数据。
+    File artifact metadata produced by an agent execution.
+    """
+
+    doc_id: str
+    operation: str
+    file_name: str
+    output_path: str
+    change_count: int | None = None
+
+
+class AgentExecuteResponse(APIModel):
+    """代理执行接口返回的结果结构。
+    Result payload returned by the agent execution endpoint.
+    """
+
+    intent: str
+    entities: list[str]
+    fields: list[str]
+    target: str
+    need_db_store: bool
+    context_id: str | None
+    preview: list[dict[str, object]]
+    edits: list[dict[str, str]]
+    planner: str
+    execution_type: str
+    summary: str
+    facts: list[FactResponse]
+    artifacts: list[AgentExecutionArtifactResponse]
+    document_ids: list[str]
+    task_id: str | None = None
+    task_status: str | None = None
+    template_name: str | None = None

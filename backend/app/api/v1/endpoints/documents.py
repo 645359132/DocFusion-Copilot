@@ -1,16 +1,24 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, File, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 
 from app.core.container import get_container
-from app.schemas.common import DocumentResponse
-from app.schemas.documents import DocumentUploadAcceptedResponse
+from app.schemas.common import BlockResponse, DocumentResponse, FactResponse
+from app.schemas.documents import (
+    DocumentBatchUploadAcceptedResponse,
+    DocumentBatchUploadItemResponse,
+    DocumentUploadAcceptedResponse,
+)
+from app.utils.ids import new_id
 
 router = APIRouter()
 
 
 @router.post("/upload", response_model=DocumentUploadAcceptedResponse)
-async def upload_document(file: UploadFile = File(...)) -> DocumentUploadAcceptedResponse:
+async def upload_document(
+    file: UploadFile = File(...),
+    document_set_id: str | None = Form(default=None),
+) -> DocumentUploadAcceptedResponse:
     """接收源文档并加入异步解析队列。
     Accept a source document and queue an asynchronous parsing task.
     """
@@ -18,14 +26,54 @@ async def upload_document(file: UploadFile = File(...)) -> DocumentUploadAccepte
         raise HTTPException(status_code=400, detail="Missing uploaded file name.")
     content = await file.read()
     try:
-        document, task = get_container().document_service.upload_document(file.filename, content)
+        document, task = get_container().document_service.upload_document(
+            file.filename,
+            content,
+            document_set_id=document_set_id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return DocumentUploadAcceptedResponse(
         task_id=task.task_id,
         status=task.status,
         document=DocumentResponse.model_validate(document),
+        document_set_id=document_set_id,
     )
+
+
+@router.post("/upload-batch", response_model=DocumentBatchUploadAcceptedResponse)
+async def upload_document_batch(
+    files: list[UploadFile] = File(...),
+    document_set_id: str | None = Form(default=None),
+) -> DocumentBatchUploadAcceptedResponse:
+    """接收一批源文档并加入异步解析队列。
+    Accept a batch of source documents and queue asynchronous parsing tasks.
+    """
+    if not files:
+        raise HTTPException(status_code=400, detail="No uploaded files were provided.")
+
+    resolved_document_set_id = document_set_id or new_id("docset")
+    items: list[DocumentBatchUploadItemResponse] = []
+    for file in files:
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="One uploaded file is missing its file name.")
+        content = await file.read()
+        try:
+            document, task = get_container().document_service.upload_document(
+                file.filename,
+                content,
+                document_set_id=resolved_document_set_id,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        items.append(
+            DocumentBatchUploadItemResponse(
+                task_id=task.task_id,
+                status=task.status,
+                document=DocumentResponse.model_validate(document),
+            )
+        )
+    return DocumentBatchUploadAcceptedResponse(document_set_id=resolved_document_set_id, items=items)
 
 
 @router.get("", response_model=list[DocumentResponse])
@@ -35,3 +83,48 @@ def list_documents() -> list[DocumentResponse]:
     """
     documents = get_container().document_service.list_documents()
     return [DocumentResponse.model_validate(document) for document in documents]
+
+
+@router.get("/{doc_id}", response_model=DocumentResponse)
+def get_document(doc_id: str) -> DocumentResponse:
+    """按 id 获取单个文档。
+    Fetch a single document by id.
+    """
+    document = get_container().document_service.get_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    return DocumentResponse.model_validate(document)
+
+
+@router.get("/{doc_id}/blocks", response_model=list[BlockResponse])
+def get_document_blocks(doc_id: str) -> list[BlockResponse]:
+    """获取指定文档的解析块。
+    Fetch parsed blocks for a document.
+    """
+    document = get_container().document_service.get_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    blocks = get_container().document_service.get_document_blocks(doc_id)
+    return [BlockResponse.model_validate(block) for block in blocks]
+
+
+@router.get("/{doc_id}/facts", response_model=list[FactResponse])
+def get_document_facts(
+    doc_id: str,
+    canonical_only: bool = Query(default=False),
+    status: str | None = Query(default=None),
+    min_confidence: float | None = Query(default=None, ge=0.0, le=1.0),
+) -> list[FactResponse]:
+    """获取指定文档关联的事实记录。
+    Fetch fact records associated with a document.
+    """
+    document = get_container().document_service.get_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    facts = get_container().document_service.get_document_facts(
+        doc_id,
+        canonical_only=canonical_only,
+        status=status,
+        min_confidence=min_confidence,
+    )
+    return [FactResponse.model_validate(fact) for fact in facts]

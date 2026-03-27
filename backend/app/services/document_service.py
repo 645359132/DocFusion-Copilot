@@ -6,7 +6,7 @@ from pathlib import Path
 from app.core.config import Settings
 from app.models.domain import DocumentRecord, DocumentStatus, TaskRecord, TaskStatus, TaskType
 from app.parsers.factory import ParserRegistry
-from app.repositories.memory import InMemoryRepository
+from app.repositories.base import Repository
 from app.services.fact_extraction import FactExtractionService
 from app.tasks.executor import TaskExecutor
 from app.utils.files import safe_filename
@@ -20,7 +20,7 @@ class DocumentService:
 
     def __init__(
         self,
-        repository: InMemoryRepository,
+        repository: Repository,
         parser_registry: ParserRegistry,
         extraction_service: FactExtractionService,
         executor: TaskExecutor,
@@ -35,7 +35,12 @@ class DocumentService:
         self._executor = executor
         self._settings = settings
 
-    def upload_document(self, file_name: str, content: bytes) -> tuple[DocumentRecord, TaskRecord]:
+    def upload_document(
+        self,
+        file_name: str,
+        content: bytes,
+        document_set_id: str | None = None,
+    ) -> tuple[DocumentRecord, TaskRecord]:
         """保存上传文件并加入异步解析流程。
         Persist an uploaded file and enqueue asynchronous parsing work.
         """
@@ -55,6 +60,7 @@ class DocumentService:
             doc_type=suffix.lstrip("."),
             upload_time=datetime.now(timezone.utc),
             status=DocumentStatus.uploaded,
+            metadata={"document_set_id": document_set_id} if document_set_id else {},
         )
         task = TaskRecord(
             task_id=new_id("task"),
@@ -76,6 +82,36 @@ class DocumentService:
         Return all documents currently stored in the repository.
         """
         return self._repository.list_documents()
+
+    def get_document(self, doc_id: str) -> DocumentRecord | None:
+        """按 id 查询文档。
+        Fetch a document by id.
+        """
+        return self._repository.get_document(doc_id)
+
+    def get_document_blocks(self, doc_id: str) -> list:
+        """返回指定文档的全部解析块。
+        Return all parsed blocks for a document.
+        """
+        return self._repository.list_blocks(doc_id)
+
+    def get_document_facts(
+        self,
+        doc_id: str,
+        *,
+        canonical_only: bool = False,
+        status: str | None = None,
+        min_confidence: float | None = None,
+    ) -> list:
+        """返回指定文档关联的事实记录。
+        Return all fact records associated with a document.
+        """
+        return self._repository.list_facts(
+            canonical_only=canonical_only,
+            document_ids={doc_id},
+            status=status,
+            min_confidence=min_confidence,
+        )
 
     def _process_document(self, doc_id: str, file_path: Path, task_id: str) -> None:
         """解析单个上传文档、抽取事实并更新任务状态。

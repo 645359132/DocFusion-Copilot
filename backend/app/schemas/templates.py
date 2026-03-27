@@ -11,6 +11,8 @@ class TemplateFillAcceptedResponse(APIModel):
     task_id: str
     status: str
     template_name: str
+    document_set_id: str | None = None
+    auto_match: bool = True
 
 
 class TemplateFillResultResponse(APIModel):

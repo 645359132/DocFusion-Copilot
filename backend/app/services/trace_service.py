@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from app.repositories.memory import InMemoryRepository
+from app.repositories.base import Repository
 
 
 class TraceService:
@@ -8,7 +8,7 @@ class TraceService:
     Build evidence traces for extracted facts and their template usages.
     """
 
-    def __init__(self, repository: InMemoryRepository) -> None:
+    def __init__(self, repository: Repository) -> None:
         """绑定共享仓储依赖。
         Bind the service to the shared repository.
         """

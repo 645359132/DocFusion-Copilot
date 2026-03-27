@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 
@@ -15,6 +17,7 @@ async def fill_template(
     document_set_id: str | None = Form(default="default"),
     fill_mode: str = Form(default="canonical"),
     document_ids: str | None = Form(default=None),
+    auto_match: bool = Form(default=True),
 ) -> TemplateFillAcceptedResponse:
     """上传模板工作簿并加入回填任务队列。
     Upload a template workbook and queue a fill task.
@@ -31,6 +34,7 @@ async def fill_template(
             fill_mode=fill_mode,
             document_set_id=document_set_id,
             document_ids=parsed_document_ids or None,
+            auto_match=auto_match,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -39,6 +43,8 @@ async def fill_template(
         task_id=task.task_id,
         status=task.status,
         template_name=template_file.filename,
+        document_set_id=document_set_id,
+        auto_match=auto_match,
     )
 
 
@@ -50,8 +56,14 @@ def download_result(task_id: str) -> FileResponse:
     result = get_container().template_service.get_result(task_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Filled template result not found.")
+    suffix = Path(result.output_file_name).suffix.lower()
+    media_type = (
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        if suffix == ".docx"
+        else "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
     return FileResponse(
         path=result.output_path,
         filename=result.output_file_name,
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        media_type=media_type,
     )

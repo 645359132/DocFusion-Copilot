@@ -28,8 +28,10 @@ def create_app():
     from fastapi import FastAPI
 
     from app.api.v1.router import api_router
+    from app.core.container import get_container
 
     settings = get_settings()
+    get_container()
     app = FastAPI(
         title=settings.project_name,
         version="0.1.0",
@@ -51,8 +53,10 @@ _APP_IMPORT_ERROR: ModuleNotFoundError | None = None
 try:
     app = create_app()
 except ModuleNotFoundError as exc:
-    app = None
     _APP_IMPORT_ERROR = exc
+    if __name__ != "__main__":
+        raise
+    app = None
 
 
 def run() -> None:

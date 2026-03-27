@@ -17,19 +17,18 @@ from app.utils.normalizers import (
     normalize_field_name,
 )
 
-_BRACKET_UNIT_RE = re.compile(r"[（(](.*?)[）)]")
-_GENERIC_NUMBER_RE = re.compile(r"(?P<value>-?\d[\d,]*(?:\.\d+)?)\s*(?P<unit>万亿元|亿元|亿|万元|元|万人|人|%)?")
+_BRACKET_UNIT_RE = re.compile(r"[（(](.*?)[)）]")
+_GENERIC_NUMBER_RE = re.compile(r"(?P<value>-?\d[\d,]*(?:\.\d+)?)\s*(?P<unit>万亿元|亿元|万元|元|万人|人|%)?")
+_DATE_RE = re.compile(r"(?P<date>(?:19|20)\d{2}[年/-]\d{1,2}[月/-]\d{1,2}日?)")
+_TEXT_VALUE_RE = re.compile(r"(?:为|是|:|：)\s*(?P<value>[^，。；;\n]{2,40})")
 
 
 class FactExtractionService:
-    """从标准化文档块中抽取结构化事实。
-    Extract structured facts from normalized document blocks.
-    """
+    """从标准化文档块中抽取结构化事实。    Extract structured facts from normalized document blocks."""
 
     def extract(self, document: DocumentRecord, blocks: list[DocumentBlock]) -> list[FactRecord]:
-        """执行块级抽取并返回去重后的事实列表。
-        Run block-level extraction and return deduplicated facts.
-        """
+        """执行块级抽取并返回去重后的事实列表。    Run block-level extraction and return deduplicated facts."""
+
         facts: list[FactRecord] = []
         for block in blocks:
             if block.block_type == "table_row":
@@ -39,9 +38,8 @@ class FactExtractionService:
         return list(self._deduplicate(facts).values())
 
     def _extract_from_table_row(self, document: DocumentRecord, block: DocumentBlock) -> list[FactRecord]:
-        """从标准化表格行块中抽取事实。
-        Extract facts from a normalized table row block.
-        """
+        """从标准化表格行块中抽取事实。    Extract facts from a normalized table row block."""
+
         row_values = block.metadata.get("row_values")
         if not isinstance(row_values, dict):
             return []
@@ -51,7 +49,7 @@ class FactExtractionService:
             if is_entity_column(str(header)) and value:
                 entity_name = normalize_entity_name(str(value))
                 break
-            if normalize_field_name(header) is None and value:
+            if normalize_field_name(str(header)) is None and value:
                 mentions = find_entity_mentions(str(value))
                 if mentions:
                     entity_name = mentions[0]
@@ -62,20 +60,17 @@ class FactExtractionService:
 
         for header, raw_value in row_values.items():
             field_name = normalize_field_name(str(header))
-            if not field_name or not str(raw_value).strip():
+            raw_text = str(raw_value).strip()
+            if not field_name or not raw_text:
                 continue
 
-            header_unit = self._extract_unit_from_header(str(header))
-            value_num, detected_unit = extract_numeric_with_unit(str(raw_value))
-            final_num, final_unit = convert_to_canonical_unit(
-                field_name,
-                value_num,
-                detected_unit or header_unit,
-            )
             entity = entity_name or self._fallback_entity_from_text(block.text)
             if not entity and FIELD_ENTITY_TYPES.get(field_name) == "city":
                 continue
 
+            header_unit = self._extract_unit_from_header(str(header))
+            value_num, detected_unit = extract_numeric_with_unit(raw_text)
+            final_num, final_unit = convert_to_canonical_unit(field_name, value_num, detected_unit or header_unit)
             facts.append(
                 FactRecord(
                     fact_id=new_id("fact"),
@@ -83,8 +78,8 @@ class FactExtractionService:
                     entity_name=entity or document.file_name,
                     field_name=field_name,
                     value_num=final_num,
-                    value_text=str(raw_value).strip(),
-                    unit=final_unit,
+                    value_text=raw_text,
+                    unit=final_unit if final_num is not None else None,
                     year=year,
                     source_doc_id=document.doc_id,
                     source_block_id=block.block_id,
@@ -96,9 +91,8 @@ class FactExtractionService:
         return facts
 
     def _extract_from_text(self, document: DocumentRecord, block: DocumentBlock) -> list[FactRecord]:
-        """从自由文本段落或标题中抽取事实。
-        Extract facts from free-form paragraph or heading text.
-        """
+        """从自由文本段落或标题中抽取事实。    Extract facts from free-form paragraph or heading text."""
+
         content = block.text
         if not content:
             return []
@@ -106,42 +100,91 @@ class FactExtractionService:
         entity_positions = self._find_entity_positions(content, block.section_path)
         year = infer_year(content) or infer_year(document.file_name)
         facts: list[FactRecord] = []
+        occupied_spans: list[tuple[int, int]] = []
 
-        for canonical_name, aliases in FIELD_ALIASES.items():
-            alias_candidates = sorted({canonical_name, *aliases}, key=len, reverse=True)
-            for alias in alias_candidates:
-                for match in re.finditer(re.escape(alias), content, flags=re.IGNORECASE):
-                    raw_value, unit = self._find_numeric_near_alias(content, match.start(), match.end())
-                    if raw_value is None:
-                        continue
-                    entity_name = self._resolve_nearest_entity(entity_positions, match.start())
-                    if not entity_name and FIELD_ENTITY_TYPES.get(canonical_name) == "city":
-                        continue
-                    final_num, final_unit = convert_to_canonical_unit(canonical_name, raw_value, unit)
-                    confidence = 0.88 if entity_name else 0.72
-                    facts.append(
-                        FactRecord(
-                            fact_id=new_id("fact"),
-                            entity_type=FIELD_ENTITY_TYPES.get(canonical_name, "generic"),
-                            entity_name=entity_name or document.file_name,
-                            field_name=canonical_name,
-                            value_num=final_num,
-                            value_text=content[max(0, match.start() - 24) : min(len(content), match.end() + 24)].strip(),
-                            unit=final_unit,
-                            year=year,
-                            source_doc_id=document.doc_id,
-                            source_block_id=block.block_id,
-                            source_span=content,
-                            confidence=confidence,
-                            status="confirmed" if confidence >= 0.8 else "pending_review",
-                        )
-                    )
+        alias_pairs = [
+            (canonical_name, alias)
+            for canonical_name, aliases in FIELD_ALIASES.items()
+            for alias in {canonical_name, *aliases}
+        ]
+        alias_pairs.sort(key=lambda item: len(item[1]), reverse=True)
+
+        for canonical_name, alias in alias_pairs:
+            for match in re.finditer(re.escape(alias), content, flags=re.IGNORECASE):
+                if self._is_overlapping(match.start(), match.end(), occupied_spans):
+                    continue
+
+                fact = self._build_text_fact(
+                    document=document,
+                    block=block,
+                    content=content,
+                    canonical_name=canonical_name,
+                    entity_positions=entity_positions,
+                    year=year,
+                    match=match,
+                )
+                if fact is None:
+                    continue
+                facts.append(fact)
+                occupied_spans.append((match.start(), match.end()))
         return facts
 
+    def _build_text_fact(
+        self,
+        *,
+        document: DocumentRecord,
+        block: DocumentBlock,
+        content: str,
+        canonical_name: str,
+        entity_positions: list[tuple[int, str]],
+        year: int | None,
+        match: re.Match[str],
+    ) -> FactRecord | None:
+        """根据别名命中结果构建一条文本事实。    Build one text fact from a matched alias occurrence."""
+
+        entity_name = self._resolve_nearest_entity(entity_positions, match.start())
+        if not entity_name and FIELD_ENTITY_TYPES.get(canonical_name) == "city":
+            return None
+
+        value_num: float | None = None
+        value_text = ""
+        unit: str | None = None
+
+        if canonical_name in {"甲方", "乙方"}:
+            value_text = self._find_text_value_after_alias(content, match.end())
+            if not value_text:
+                return None
+        elif canonical_name == "签订日期":
+            value_text = self._find_date_after_alias(content, match.end())
+            if not value_text:
+                return None
+        else:
+            value_num, detected_unit = self._find_numeric_after_alias(content, match.end())
+            if value_num is None:
+                return None
+            value_num, unit = convert_to_canonical_unit(canonical_name, value_num, detected_unit)
+            value_text = content[max(0, match.start() - 16) : min(len(content), match.end() + 24)].strip()
+
+        confidence = 0.88 if entity_name else 0.72
+        return FactRecord(
+            fact_id=new_id("fact"),
+            entity_type=FIELD_ENTITY_TYPES.get(canonical_name, "generic"),
+            entity_name=entity_name or document.file_name,
+            field_name=canonical_name,
+            value_num=value_num,
+            value_text=value_text,
+            unit=unit,
+            year=year,
+            source_doc_id=document.doc_id,
+            source_block_id=block.block_id,
+            source_span=content,
+            confidence=confidence,
+            status="confirmed" if confidence >= 0.8 else "pending_review",
+        )
+
     def _deduplicate(self, facts: list[FactRecord]) -> OrderedDict[tuple[str, str, str, str], FactRecord]:
-        """合并重复事实并保留最高置信度版本。
-        Collapse duplicate facts while keeping the highest-confidence copy.
-        """
+        """合并重复事实并保留最高置信度版本。    Collapse duplicate facts while keeping the highest-confidence copy."""
+
         deduplicated: OrderedDict[tuple[str, str, str, str], FactRecord] = OrderedDict()
         for fact in facts:
             key = (
@@ -156,9 +199,8 @@ class FactExtractionService:
         return deduplicated
 
     def _find_entity_positions(self, text: str, section_path: list[str]) -> list[tuple[int, str]]:
-        """定位文本中的候选实体及其位置。
-        Locate candidate entity mentions and their positions inside text.
-        """
+        """定位文本中的候选实体位置。    Locate candidate entity mentions and their positions inside text."""
+
         found: list[tuple[int, str]] = []
         seen: set[str] = set()
         for entity_name in find_entity_mentions(text, section_path):
@@ -174,46 +216,53 @@ class FactExtractionService:
         return sorted(found, key=lambda item: item[0])
 
     def _resolve_nearest_entity(self, positions: list[tuple[int, str]], anchor: int) -> str | None:
-        """选择距离字段别名最近的实体提及。
-        Choose the entity mention closest to a field alias occurrence.
-        """
+        """选择离字段别名最近的实体。    Choose the entity mention closest to a field alias occurrence."""
+
         if not positions:
             return None
-        best_position, best_name = min(positions, key=lambda item: abs(item[0] - anchor))
-        if best_position > anchor and len(positions) > 1:
-            previous_entities = [item for item in positions if item[0] <= anchor]
-            if previous_entities:
-                return previous_entities[-1][1]
-        return best_name
+        previous_entities = [item for item in positions if item[0] <= anchor]
+        if previous_entities:
+            return previous_entities[-1][1]
+        return positions[0][1]
 
-    def _find_numeric_near_alias(self, text: str, start: int, end: int) -> tuple[float | None, str | None]:
-        """查找字段别名附近最近的数值表达。
-        Find the closest numeric expression around a detected field alias.
-        """
-        window_start = max(0, start - 32)
-        window_end = min(len(text), end + 32)
-        window = text[window_start:window_end]
-        local_anchor = start - window_start
-        matches = list(_GENERIC_NUMBER_RE.finditer(window))
-        if not matches:
+    def _find_numeric_after_alias(self, text: str, anchor_end: int) -> tuple[float | None, str | None]:
+        """在字段别名后方查找最近数值。    Find the nearest numeric expression after a detected field alias."""
+
+        window = text[anchor_end : min(len(text), anchor_end + 36)]
+        match = _GENERIC_NUMBER_RE.search(window)
+        if not match or match.group("value") is None:
             return None, None
-        nearest = min(matches, key=lambda item: abs(item.start() - local_anchor))
-        if nearest.group("value") is None:
-            return None, None
-        return float(nearest.group("value").replace(",", "")), nearest.group("unit")
+        return float(match.group("value").replace(",", "")), match.group("unit")
+
+    def _find_date_after_alias(self, text: str, anchor_end: int) -> str:
+        """在字段别名后方查找日期值。    Find a date value after a detected field alias."""
+
+        window = text[anchor_end : min(len(text), anchor_end + 40)]
+        match = _DATE_RE.search(window)
+        return match.group("date") if match else ""
+
+    def _find_text_value_after_alias(self, text: str, anchor_end: int) -> str:
+        """在字段别名后方提取短文本值。    Extract a short free-text value after a detected field alias."""
+
+        window = text[anchor_end : min(len(text), anchor_end + 48)]
+        match = _TEXT_VALUE_RE.search(window)
+        return match.group("value").strip() if match else ""
 
     def _extract_unit_from_header(self, header: str) -> str | None:
-        """从表头中读取单位提示。
-        Read a unit hint from a table header if one is present.
-        """
+        """从表头中读取单位提示。    Read a unit hint from a table header if one is present."""
+
         match = _BRACKET_UNIT_RE.search(header)
         if not match:
             return None
         return match.group(1).strip()
 
     def _fallback_entity_from_text(self, text: str) -> str:
-        """回退到文本片段中首个检测到的实体。
-        Fallback to the first detected entity mention in a text snippet.
-        """
+        """回退到文本片段中首个检测到的实体。    Fallback to the first detected entity mention in a text snippet."""
+
         entities = find_entity_mentions(text)
         return entities[0] if entities else ""
+
+    def _is_overlapping(self, start: int, end: int, spans: list[tuple[int, int]]) -> bool:
+        """判断当前命中是否与已接受命中重叠。    Return whether the current match overlaps an accepted span."""
+
+        return any(start < existing_end and end > existing_start for existing_start, existing_end in spans)

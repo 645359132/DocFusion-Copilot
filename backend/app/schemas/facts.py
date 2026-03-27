@@ -1,6 +1,16 @@
 from __future__ import annotations
 
+from pydantic import Field
+
 from app.schemas.common import APIModel, BlockResponse, DocumentResponse, FactResponse
+
+
+class FactReviewRequest(APIModel):
+    """事实人工复核请求体。    Request payload for manual fact review."""
+
+    status: str = Field(min_length=1)
+    reviewer: str | None = None
+    note: str | None = None
 
 
 class FactTraceResponse(APIModel):
