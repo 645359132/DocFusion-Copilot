@@ -13,6 +13,27 @@ def _workspace_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
+def _env_flag(name: str, default: bool = False) -> bool:
+    """将环境变量解析为布尔值。
+    Parse an environment variable into a boolean value.
+    """
+    raw_value = os.getenv(name)
+    if raw_value is None:
+        return default
+    return raw_value.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _split_csv_env(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    """把逗号分隔的环境变量解析为字符串元组。
+    Parse a comma-separated environment variable into a tuple of strings.
+    """
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    items = tuple(item.strip() for item in raw_value.split(",") if item.strip())
+    return items or default
+
+
 @dataclass(slots=True)
 class Settings:
     """MVP 后端运行时配置集合。
@@ -40,6 +61,28 @@ class Settings:
     openai_model: str = field(default_factory=lambda: os.getenv("DOCFUSION_OPENAI_MODEL", "gpt-4o-mini"))
     openai_timeout_seconds: float = field(
         default_factory=lambda: float(os.getenv("DOCFUSION_OPENAI_TIMEOUT_SECONDS", "45"))
+    )
+    cors_allow_origins_raw: tuple[str, ...] = field(
+        default_factory=lambda: _split_csv_env(
+            "DOCFUSION_CORS_ALLOW_ORIGINS",
+            (
+                "http://localhost:3000",
+                "http://127.0.0.1:3000",
+                "http://localhost:5173",
+                "http://127.0.0.1:5173",
+                "http://localhost:8080",
+                "http://127.0.0.1:8080",
+            ),
+        )
+    )
+    cors_allow_methods_raw: tuple[str, ...] = field(
+        default_factory=lambda: _split_csv_env("DOCFUSION_CORS_ALLOW_METHODS", ("*",))
+    )
+    cors_allow_headers_raw: tuple[str, ...] = field(
+        default_factory=lambda: _split_csv_env("DOCFUSION_CORS_ALLOW_HEADERS", ("*",))
+    )
+    cors_allow_credentials: bool = field(
+        default_factory=lambda: _env_flag("DOCFUSION_CORS_ALLOW_CREDENTIALS", default=False)
     )
 
     @property
@@ -97,6 +140,27 @@ class Settings:
         Return allowed extensions for fillable templates.
         """
         return (".xlsx", ".docx")
+
+    @property
+    def cors_allow_origins(self) -> list[str]:
+        """返回允许跨域访问的前端源列表。
+        Return the list of frontend origins allowed for CORS.
+        """
+        return list(self.cors_allow_origins_raw)
+
+    @property
+    def cors_allow_methods(self) -> list[str]:
+        """返回允许跨域请求使用的 HTTP 方法列表。
+        Return the HTTP methods allowed for CORS requests.
+        """
+        return list(self.cors_allow_methods_raw)
+
+    @property
+    def cors_allow_headers(self) -> list[str]:
+        """返回允许跨域请求携带的请求头列表。
+        Return the request headers allowed for CORS requests.
+        """
+        return list(self.cors_allow_headers_raw)
 
     def ensure_directories(self) -> None:
         """确保后端运行所需目录全部存在。
