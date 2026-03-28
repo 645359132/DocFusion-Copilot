@@ -26,6 +26,7 @@ def create_app():
     Build and return the FastAPI application instance.
     """
     from fastapi import FastAPI
+    from fastapi.middleware.cors import CORSMiddleware
 
     from app.api.v1.router import api_router
     from app.core.container import get_container
@@ -36,6 +37,13 @@ def create_app():
         title=settings.project_name,
         version="0.1.0",
         summary="Competition-ready MVP backend for document parsing, fact extraction and template filling.",
+    )
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.cors_allow_origins,
+        allow_credentials=settings.cors_allow_credentials,
+        allow_methods=settings.cors_allow_methods,
+        allow_headers=settings.cors_allow_headers,
     )
     app.include_router(api_router, prefix=settings.api_prefix)
 

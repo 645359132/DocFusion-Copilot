@@ -77,13 +77,23 @@ DOCFUSION_OPENAI_MODEL=gpt-4o-mini
 DOCFUSION_OPENAI_TIMEOUT_SECONDS=45
 ```
 
+4. 可选配置 CORS
+
+```bash
+DOCFUSION_CORS_ALLOW_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
+DOCFUSION_CORS_ALLOW_METHODS=*
+DOCFUSION_CORS_ALLOW_HEADERS=*
+DOCFUSION_CORS_ALLOW_CREDENTIALS=false
+```
+
 说明：
 
 - 不配置也可运行，系统会使用本地规则完成解析、匹配和回填
 - 配置后，`agent/chat`、文档摘要和模板文档匹配会优先尝试调用 OpenAI-compatible 接口
 - 仓库只保留接口模板，不内置真实 `api_key` 和 `base_url`
+- 后端已启用 `CORSMiddleware`，默认放行常见本地开发源：`3000 / 5173 / 8080`
 
-4. 启动服务
+5. 启动服务
 
 ```bash
 uvicorn app.main:app --app-dir backend --reload
@@ -95,7 +105,7 @@ uvicorn app.main:app --app-dir backend --reload
 python backend/app/main.py
 ```
 
-5. 运行测试
+6. 运行测试
 
 ```bash
 python -m unittest discover backend/tests -v
