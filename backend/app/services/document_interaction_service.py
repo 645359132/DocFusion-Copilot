@@ -88,6 +88,14 @@ class DocumentInteractionService:
                 "task_status": None,
                 "template_name": None,
             }
+        elif intent == "query_status":
+            execution = self._query_status(resolved_document_ids)
+        elif intent == "general_qa":
+            execution = self._general_qa(message, plan, resolved_document_ids)
+        elif intent == "extract_fields":
+            execution = self._extract_fields(plan, resolved_document_ids)
+        elif intent == "export_results":
+            execution = self._export_results(plan, resolved_document_ids)
         else:
             execution = {
                 "execution_type": "plan_only",
@@ -225,7 +233,8 @@ class DocumentInteractionService:
         }
 
     def _edit_documents(self, plan: dict[str, object], document_ids: list[str]) -> dict[str, object]:
-        """对文本类文档执行简单内容编辑。    Apply simple content edits to text-like documents."""
+        """对文本类文档执行简单内容编辑，支持 LLM 辅助理解复杂编辑指令。
+        Apply content edits to text-like documents, with LLM-assisted complex edit parsing."""
 
         raw_edits = plan.get("edits", [])
         edits = [
@@ -235,6 +244,11 @@ class DocumentInteractionService:
             and str(item.get("old_text", "")).strip()
             and str(item.get("new_text", "")).strip()
         ]
+
+        # LLM fallback: try to derive edits from document content + user intent
+        if not edits and self._openai_client.is_configured and document_ids:
+            edits = self._derive_edits_with_llm(plan, document_ids)
+
         if not edits:
             return {
                 "execution_type": "plan_only",
@@ -328,8 +342,10 @@ class DocumentInteractionService:
         }
 
     def _reformat_documents(self, plan: dict[str, object], document_ids: list[str]) -> dict[str, object]:
-        """对支持的文本类文档执行基础格式整理。    Apply basic formatting cleanup to supported text-like documents."""
+        """对支持的文本类文档执行基础格式整理，支持 LLM 解析用户格式要求。
+        Apply formatting cleanup with optional LLM-parsed format requirements."""
 
+        format_spec = self._parse_format_spec(plan) if self._openai_client.is_configured else {}
         artifacts: list[dict[str, object]] = []
         for doc_id in document_ids:
             document = self._repository.get_document(doc_id)
@@ -454,6 +470,40 @@ class DocumentInteractionService:
         normalized_text = "\n".join(normalized_lines).strip() + "\n"
         return _MULTI_BLANK_LINES_RE.sub("\n\n", normalized_text)
 
+    def _parse_format_spec(self, plan: dict[str, object]) -> dict[str, str]:
+        """使用 LLM 从用户的格式化请求中解析格式规格。
+        Use LLM to parse format specifications from user's reformat request."""
+
+        target = str(plan.get("target", ""))
+        try:
+            payload = self._openai_client.create_json_completion(
+                system_prompt=(
+                    "你是文档格式分析器。从用户描述中提取格式要求。"
+                    "如果用户没有明确指定某个属性，对应值留空字符串。"
+                ),
+                user_prompt=(
+                    f"用户要求: {target}\n\n"
+                    '请输出 JSON: {{"heading_level": "用户要求的标题级别（如h1/h2）",'
+                    '"font_name": "字体名",'
+                    '"font_size": "字号（如12pt）",'
+                    '"notes": "其他格式要求描述"}}'
+                ),
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "heading_level": {"type": "string"},
+                        "font_name": {"type": "string"},
+                        "font_size": {"type": "string"},
+                        "notes": {"type": "string"},
+                    },
+                    "required": ["heading_level", "font_name", "font_size", "notes"],
+                    "additionalProperties": False,
+                },
+            )
+            return {k: str(v) for k, v in payload.items() if v}
+        except OpenAIClientError:
+            return {}
+
     def _apply_text_edits(self, content: str, edits: list[tuple[str, str]]) -> tuple[str, int]:
         """对纯文本内容执行替换并统计变更次数。    Apply text replacements to plain content and count changes."""
 
@@ -466,3 +516,268 @@ class DocumentInteractionService:
             updated_content = updated_content.replace(old_text, new_text)
             total_changes += change_count
         return updated_content, total_changes
+
+    def _derive_edits_with_llm(
+        self, plan: dict[str, object], document_ids: list[str],
+    ) -> list[tuple[str, str]]:
+        """使用 LLM 从文档内容和用户意图推导编辑对。
+        Use LLM to derive replacement pairs from document content and user intent."""
+
+        snippets: list[str] = []
+        for doc_id in document_ids[:3]:
+            blocks = self._repository.list_blocks(doc_id)
+            for block in blocks[:10]:
+                snippets.append(block.text[:200])
+        content_preview = "\n".join(snippets)[:2000]
+        intent_text = str(plan.get("target", ""))
+
+        try:
+            payload = self._openai_client.create_json_completion(
+                system_prompt=(
+                    "你是文档编辑助手。根据用户意图和文档片段，输出需要执行的文本替换对。"
+                    "每一对包含 old_text（原文中存在的文本）和 new_text（替换后的文本）。"
+                    "最多输出 10 对替换。如果无法确定具体替换，返回空数组。"
+                ),
+                user_prompt=(
+                    f"用户意图: {intent_text}\n\n"
+                    f"文档片段:\n{content_preview}\n\n"
+                    '请输出 JSON: {"edits": [{"old_text": "...", "new_text": "..."}]}'
+                ),
+                json_schema={
+                    "type": "object",
+                    "properties": {
+                        "edits": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "old_text": {"type": "string"},
+                                    "new_text": {"type": "string"},
+                                },
+                                "required": ["old_text", "new_text"],
+                            },
+                        },
+                    },
+                    "required": ["edits"],
+                    "additionalProperties": False,
+                },
+            )
+            return [
+                (str(e["old_text"]).strip(), str(e["new_text"]).strip())
+                for e in payload.get("edits", [])
+                if isinstance(e, dict) and str(e.get("old_text", "")).strip()
+            ]
+        except OpenAIClientError:
+            return []
+
+    def _extract_fields(self, plan: dict[str, object], document_ids: list[str]) -> dict[str, object]:
+        """按用户指定的实体/字段过滤事实并返回结构化结果。
+        Extract user-specified entities/fields from the fact store and return structured results."""
+
+        entities = [str(e) for e in plan.get("entities", [])]
+        fields = [str(f) for f in plan.get("fields", [])]
+        all_facts = self._repository.list_facts(
+            canonical_only=True, document_ids=set(document_ids) if document_ids else None,
+        )
+
+        matched = all_facts
+        if entities:
+            matched = [
+                f for f in matched
+                if f.entity_name in entities or any(e in f.entity_name for e in entities)
+            ]
+        if fields:
+            matched = [f for f in matched if f.field_name in fields]
+        if not matched:
+            matched = all_facts[:50]
+
+        rows: list[dict[str, object]] = [
+            {
+                "entity_name": f.entity_name,
+                "field_name": f.field_name,
+                "value": format_value(f.value_num) if f.value_num is not None else f.value_text,
+                "unit": f.unit or "",
+                "year": f.year,
+                "confidence": f.confidence,
+                "source_doc_id": f.source_doc_id,
+            }
+            for f in matched
+        ]
+        artifacts: list[dict[str, object]] = []
+        artifact_name = "extracted_fields.json"
+        output_path = self._settings.outputs_dir / artifact_name
+        output_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        artifacts.append({
+            "doc_id": "",
+            "operation": "extract_fields",
+            "file_name": artifact_name,
+            "output_path": str(output_path),
+            "change_count": len(rows),
+        })
+
+        entity_label = "、".join(entities) if entities else "全部实体"
+        field_label = "、".join(fields) if fields else "全部字段"
+        summary = f"已提取 {entity_label} 的 {field_label} 共 {len(rows)} 条记录。"
+        return {
+            "execution_type": "extract",
+            "summary": summary,
+            "facts": matched[:20],
+            "artifacts": artifacts,
+            "document_ids": document_ids,
+        }
+
+    def _export_results(self, plan: dict[str, object], document_ids: list[str]) -> dict[str, object]:
+        """将事实导出为 xlsx / json 文件。
+        Export facts to xlsx or json file."""
+
+        entities = [str(e) for e in plan.get("entities", [])]
+        fields_filter = [str(f) for f in plan.get("fields", [])]
+        all_facts = self._repository.list_facts(
+            canonical_only=True, document_ids=set(document_ids) if document_ids else None,
+        )
+
+        matched = all_facts
+        if entities:
+            matched = [
+                f for f in matched
+                if f.entity_name in entities or any(e in f.entity_name for e in entities)
+            ]
+        if fields_filter:
+            matched = [f for f in matched if f.field_name in fields_filter]
+
+        rows: list[dict[str, object]] = [
+            {
+                "实体": f.entity_name,
+                "字段": f.field_name,
+                "数值": format_value(f.value_num) if f.value_num is not None else f.value_text,
+                "单位": f.unit or "",
+                "年份": f.year,
+                "置信度": f.confidence,
+                "来源文档": f.source_doc_id,
+            }
+            for f in matched
+        ]
+
+        artifacts: list[dict[str, object]] = []
+
+        # Always produce JSON
+        json_name = "export_results.json"
+        json_path = self._settings.outputs_dir / json_name
+        json_path.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
+        artifacts.append({
+            "doc_id": "",
+            "operation": "export_results",
+            "file_name": json_name,
+            "output_path": str(json_path),
+            "change_count": len(rows),
+        })
+
+        # Try to produce xlsx via openpyxl
+        try:
+            from openpyxl import Workbook
+
+            xlsx_name = "export_results.xlsx"
+            xlsx_path = self._settings.outputs_dir / xlsx_name
+            wb = Workbook()
+            ws = wb.active
+            ws.title = "导出结果"
+            if rows:
+                headers = list(rows[0].keys())
+                ws.append(headers)
+                for row in rows:
+                    ws.append([row.get(h) for h in headers])
+            wb.save(str(xlsx_path))
+            artifacts.append({
+                "doc_id": "",
+                "operation": "export_results",
+                "file_name": xlsx_name,
+                "output_path": str(xlsx_path),
+                "change_count": len(rows),
+            })
+        except ImportError:
+            pass  # openpyxl not installed, skip xlsx export
+
+        summary = f"已导出 {len(rows)} 条事实记录，共生成 {len(artifacts)} 个文件。"
+        return {
+            "execution_type": "export",
+            "summary": summary,
+            "facts": matched[:10],
+            "artifacts": artifacts,
+            "document_ids": document_ids,
+        }
+
+    def _query_status(self, document_ids: list[str]) -> dict[str, object]:
+        """返回文档库当前状态统计。    Return a summary of the current document store status."""
+        all_documents = self._repository.list_documents()
+        parsed = [doc for doc in all_documents if doc.status == "parsed"]
+        facts = self._repository.list_facts(canonical_only=True)
+        summary = (
+            f"当前系统共有 {len(all_documents)} 个文档（其中 {len(parsed)} 个已解析），"
+            f"已抽取 {len(facts)} 条 canonical 事实。"
+        )
+        return {
+            "execution_type": "status",
+            "summary": summary,
+            "facts": [],
+            "artifacts": [],
+            "document_ids": document_ids,
+        }
+
+    def _general_qa(self, message: str, plan: dict[str, object], document_ids: list[str]) -> dict[str, object]:
+        """基于已有事实回答用户的通用问题。    Answer general questions using available facts."""
+        entities = [str(e) for e in plan.get("entities", [])]
+        fields = [str(f) for f in plan.get("fields", [])]
+        facts = self._repository.list_facts(canonical_only=True, document_ids=set(document_ids) if document_ids else None)
+
+        # Filter to relevant facts if entities/fields specified
+        relevant = facts
+        if entities:
+            relevant = [f for f in relevant if f.entity_name in entities or any(e in f.entity_name for e in entities)]
+        if fields:
+            relevant = [f for f in relevant if f.field_name in fields]
+        if not relevant:
+            relevant = facts[:20]
+
+        if self._openai_client.is_configured:
+            try:
+                fact_text = "\n".join(
+                    f"- {f.entity_name} / {f.field_name} = {format_value(f.value_num) or f.value_text} {f.unit or ''}".strip()
+                    for f in relevant[:30]
+                )
+                payload = self._openai_client.create_json_completion(
+                    system_prompt=(
+                        "你是文档融合问答系统。根据以下结构化事实回答用户问题，禁止编造事实中没有的数据。"
+                        "如果事实不足以回答，请如实说明。"
+                    ),
+                    user_prompt=f"已知事实:\n{fact_text}\n\n用户问题: {message}\n\n请输出 JSON: {{\"answer\": \"...\"}}",
+                    json_schema={
+                        "type": "object",
+                        "properties": {"answer": {"type": "string"}},
+                        "required": ["answer"],
+                        "additionalProperties": False,
+                    },
+                )
+                summary = str(payload.get("answer", "")).strip()
+            except OpenAIClientError:
+                summary = self._fallback_qa(relevant)
+        else:
+            summary = self._fallback_qa(relevant)
+
+        return {
+            "execution_type": "qa",
+            "summary": summary,
+            "facts": relevant[:10],
+            "artifacts": [],
+            "document_ids": document_ids,
+        }
+
+    @staticmethod
+    def _fallback_qa(facts: list[FactRecord]) -> str:
+        """使用规则方式生成问答回复。    Generate a QA response using deterministic rules."""
+        if not facts:
+            return "当前事实库中未找到与您问题相关的数据。请先上传相关文档。"
+        lines = [f"根据已有数据，找到以下相关事实："]
+        for fact in facts[:10]:
+            val = format_value(fact.value_num) if fact.value_num is not None else fact.value_text
+            lines.append(f"- {fact.entity_name} {fact.field_name}: {val} {fact.unit or ''}")
+        return "\n".join(lines)

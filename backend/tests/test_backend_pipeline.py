@@ -29,6 +29,7 @@ from app.services.trace_service import TraceService
 from app.tasks.executor import TaskExecutor
 from app.utils.spreadsheet import load_xlsx
 from app.utils.wordprocessing import load_docx_tables
+from app.utils.evaluation import generate_benchmark_markdown
 
 
 class BackendPipelineTests(unittest.TestCase):
@@ -434,6 +435,49 @@ class BackendPipelineTests(unittest.TestCase):
         self.assertEqual(4, report["matched_cells"])
         self.assertTrue(report["meets_threshold_0_80"])
 
+    def test_template_benchmark_classifies_errors_and_generates_markdown(self) -> None:
+        """基准测试应对不匹配单元格分类并支持 Markdown 输出。    Benchmark should classify mismatched cells and support Markdown output."""
+
+        self._seed_city_facts()
+        template_bytes = build_simple_template_xlsx(
+            headers=["城市", "GDP总量（亿元）", "常住人口（万人）"],
+            rows=[
+                ["上海", "", ""],
+                ["北京", "", ""],
+            ],
+        )
+        # Expected with a deliberate numeric error (unit_conversion_error: 万→亿 for pop)
+        expected_bytes = build_simple_template_xlsx(
+            headers=["城市", "GDP总量（亿元）", "常住人口（万人）"],
+            rows=[
+                ["上海", "56708.71", "248745"],
+                ["北京", "52073.4", "2185.3"],
+            ],
+        )
+
+        task = self.benchmark_service.submit_template_benchmark(
+            template_name="err_template.xlsx",
+            template_content=template_bytes,
+            expected_result_name="err_expected.xlsx",
+            expected_result_content=expected_bytes,
+            fill_mode="canonical",
+            document_ids=["doc_seed"],
+        )
+        self.executor.wait(task.task_id, timeout=5)
+
+        report = self.benchmark_service.get_report(task.task_id)
+        self.assertIsNotNone(report)
+        self.assertIn("error_counts", report)
+        self.assertIsInstance(report["error_counts"], dict)
+        # Should have at least one unit_conversion_error (248745 vs 2487.45)
+        self.assertGreater(report["error_counts"].get("unit_conversion_error", 0), 0)
+
+        # Verify Markdown generation
+        md = generate_benchmark_markdown(report)
+        self.assertIn("评测报告", md)
+        self.assertIn("误差分类", md)
+        self.assertIn("单位换算错误", md)
+
     def test_template_fill_auto_matches_relevant_documents_and_tracks_elapsed_seconds(self) -> None:
         """普通模板回填应自动筛选相关文档并记录耗时。    Regular template filling should auto-match relevant documents and record elapsed time."""
 
@@ -513,6 +557,243 @@ class BackendPipelineTests(unittest.TestCase):
         first_sheet = workbook.sheets[0]
         rows = {row.row_index: row.values for row in first_sheet.rows}
         self.assertEqual("52073.4", rows[2][1])
+
+    def test_document_interaction_service_can_extract_fields(self) -> None:
+        """extract_fields 意图应返回按实体/字段过滤的结构化结果和产物文件。
+        extract_fields intent should return filtered structured results and artifacts."""
+
+        self._seed_city_facts()
+        result = self.document_interaction_service.execute(
+            message="指标提取 上海 GDP总量",
+            document_ids=["doc_seed"],
+        )
+        self.assertEqual("extract", result["execution_type"])
+        self.assertGreater(len(result["artifacts"]), 0)
+        artifact = result["artifacts"][0]
+        self.assertEqual("extract_fields", artifact["operation"])
+        self.assertGreater(artifact["change_count"], 0)
+        output = Path(artifact["output_path"])
+        self.assertTrue(output.exists())
+        data = json.loads(output.read_text(encoding="utf-8"))
+        self.assertIsInstance(data, list)
+        self.assertGreater(len(data), 0)
+
+    def test_document_interaction_service_can_export_results(self) -> None:
+        """export_results 意图应导出事实为 JSON 和 XLSX 文件。
+        export_results intent should export facts as JSON and optionally XLSX files."""
+
+        self._seed_city_facts()
+        result = self.document_interaction_service.execute(
+            message="导出所有数据",
+            document_ids=["doc_seed"],
+        )
+        self.assertEqual("export", result["execution_type"])
+        self.assertGreaterEqual(len(result["artifacts"]), 1)
+        json_artifact = next(a for a in result["artifacts"] if a["file_name"].endswith(".json"))
+        self.assertGreater(json_artifact["change_count"], 0)
+        output = Path(json_artifact["output_path"])
+        self.assertTrue(output.exists())
+        data = json.loads(output.read_text(encoding="utf-8"))
+        self.assertGreater(len(data), 0)
+        # Check Chinese keys are used in export
+        self.assertIn("实体", data[0])
+        self.assertIn("字段", data[0])
+
+    # ── T-1: PDF 解析测试 ──
+
+    def test_pdf_upload_generates_page_blocks(self) -> None:
+        """上传 PDF 后应生成 page 类型的 Block。
+        Uploading a PDF should generate page-type blocks."""
+
+        pdf_bytes = build_simple_pdf_with_table()
+        _, task = self.document_service.upload_document("report.pdf", pdf_bytes)
+        self.executor.wait(task.task_id, timeout=5)
+
+        doc = self.repository.list_documents()[0]
+        blocks = self.repository.list_blocks(doc.doc_id)
+        self.assertGreater(len(blocks), 0)
+        block_types = {b.block_type for b in blocks}
+        self.assertIn("page", block_types)
+
+    def test_pdf_upload_generates_table_row_blocks(self) -> None:
+        """上传含表格的 PDF 后应生成 table_row 类型的 Block。
+        Uploading a PDF with a table should generate table_row blocks."""
+
+        pdf_bytes = build_simple_pdf_with_table()
+        _, task = self.document_service.upload_document("table_report.pdf", pdf_bytes)
+        self.executor.wait(task.task_id, timeout=5)
+
+        doc = self.repository.list_documents()[0]
+        blocks = self.repository.list_blocks(doc.doc_id)
+        table_blocks = [b for b in blocks if b.block_type == "table_row"]
+        self.assertGreater(len(table_blocks), 0)
+        # Verify table metadata has headers and row_values
+        first_table = table_blocks[0]
+        self.assertIn("headers", first_table.metadata)
+        self.assertIn("row_values", first_table.metadata)
+
+    # ── T-1: Agent 问答分支测试 ──
+
+    def test_agent_qa_branches_dispatch_correctly(self) -> None:
+        """summarize / query_status / general_qa 意图应正确分发。
+        Agent QA intents should be dispatched correctly."""
+
+        self._seed_city_facts()
+
+        # Test summarize
+        result = self.document_interaction_service.execute(
+            message="总结一下当前数据",
+            document_ids=["doc_seed"],
+        )
+        self.assertEqual("summary", result["execution_type"])
+        self.assertTrue(len(result["summary"]) > 0)
+
+        # Test query_status
+        result2 = self.document_interaction_service.execute(
+            message="系统状态",
+            document_ids=["doc_seed"],
+        )
+        self.assertEqual("status", result2["execution_type"])
+        self.assertIn("文档", result2["summary"])
+
+        # Test general_qa (a message that doesn't match any specific intent)
+        result3 = self.document_interaction_service.execute(
+            message="请问如何理解这些数据",
+            document_ids=["doc_seed"],
+        )
+        self.assertEqual("qa", result3["execution_type"])
+
+    # ── T-1: 对话 CRUD 测试 ──
+
+    def test_conversation_crud_lifecycle(self) -> None:
+        """创建 / 列表 / 获取 / 更新 / 删除对话应正常工作。
+        Conversation CRUD lifecycle should work correctly."""
+
+        from app.models.domain import ConversationRecord
+
+        now = datetime.now(timezone.utc)
+        record = ConversationRecord(
+            conversation_id="conv_test_1",
+            title="测试对话",
+            created_at=now,
+            updated_at=now,
+            messages=[{"role": "user", "content": "Hello"}],
+        )
+
+        # Create
+        created = self.repository.create_conversation(record)
+        self.assertEqual("conv_test_1", created.conversation_id)
+        self.assertEqual("测试对话", created.title)
+
+        # Get
+        fetched = self.repository.get_conversation("conv_test_1")
+        self.assertIsNotNone(fetched)
+        self.assertEqual(1, len(fetched.messages))
+
+        # List
+        conversations = self.repository.list_conversations()
+        self.assertEqual(1, len(conversations))
+        self.assertEqual("conv_test_1", conversations[0].conversation_id)
+
+        # Update
+        fetched.title = "更新后的对话"
+        fetched.messages.append({"role": "assistant", "content": "Hi"})
+        updated = self.repository.update_conversation(fetched)
+        self.assertIsNotNone(updated)
+        self.assertEqual("更新后的对话", updated.title)
+        self.assertEqual(2, len(updated.messages))
+
+        # Delete
+        deleted = self.repository.delete_conversation("conv_test_1")
+        self.assertIsNotNone(deleted)
+        self.assertIsNone(self.repository.get_conversation("conv_test_1"))
+        self.assertEqual(0, len(self.repository.list_conversations()))
+
+    # ── T-1: Agent 对话持久化测试 ──
+
+    def test_agent_service_persists_conversation_to_repository(self) -> None:
+        """AgentService 应在接收消息后将对话持久化到仓储。
+        AgentService should persist conversations to repository after receiving messages."""
+
+        context_id = "ctx_persist_test"
+        self.agent_service.chat("你好", context_id=context_id)
+
+        # Verify conversation was persisted
+        record = self.repository.get_conversation(context_id)
+        self.assertIsNotNone(record)
+        self.assertGreater(len(record.messages), 0)
+
+        # Verify title is auto-generated from first user message
+        self.assertTrue(len(record.title) > 0)
+
+        # Clear conversation
+        self.agent_service.clear_conversation(context_id)
+        self.assertIsNone(self.repository.get_conversation(context_id))
+
+    # ── T-1: Fact 复核测试 ──
+
+    def test_low_confidence_fact_filtering_and_review(self) -> None:
+        """低置信度筛选 → 人工修正 → 局部重回填应正常工作。
+        Low-confidence filtering → manual review → should work correctly."""
+
+        # Seed facts with varying confidence
+        self.repository.add_document(
+            DocumentRecord(
+                doc_id="doc_review",
+                file_name="review.txt",
+                stored_path="review.txt",
+                doc_type="txt",
+                upload_time=datetime.now(timezone.utc),
+                status=DocumentStatus.parsed,
+                metadata={},
+            )
+        )
+        self.repository.add_facts([
+            FactRecord(
+                fact_id="fact_high",
+                entity_type="city",
+                entity_name="上海",
+                field_name="GDP总量",
+                value_num=56708.71,
+                value_text="56708.71",
+                unit="亿元",
+                year=2025,
+                source_doc_id="doc_review",
+                source_block_id="blk_1",
+                source_span="上海GDP总量56708.71亿元",
+                confidence=0.98,
+            ),
+            FactRecord(
+                fact_id="fact_low",
+                entity_type="city",
+                entity_name="上海",
+                field_name="一般公共预算收入",
+                value_num=100.0,
+                value_text="100",
+                unit="亿元",
+                year=2025,
+                source_doc_id="doc_review",
+                source_block_id="blk_1",
+                source_span="上海一般公共预算收入100亿元",
+                confidence=0.45,
+            ),
+        ])
+
+        # Filter low-confidence facts
+        low = self.repository.list_facts(min_confidence=0.0)
+        low_conf = [f for f in low if f.confidence < 0.7]
+        self.assertEqual(1, len(low_conf))
+        self.assertEqual("fact_low", low_conf[0].fact_id)
+
+        # Manual review: fix the value
+        updated = self.repository.update_fact(
+            "fact_low",
+            status="reviewed",
+            metadata_updates={"reviewed_by": "human", "original_value": 100.0},
+        )
+        self.assertIsNotNone(updated)
+        self.assertEqual("reviewed", updated.status)
+        self.assertEqual("human", updated.metadata["reviewed_by"])
 
     def _seed_city_facts(self) -> list[FactRecord]:
         """插入模板测试所需的 canonical 事实。    Insert canonical facts required by template tests."""
@@ -716,3 +997,34 @@ def build_simple_document_docx(
         )
         archive.writestr("word/document.xml", document_xml)
     return docx_bytes.getvalue()
+
+
+def build_simple_pdf_with_table() -> bytes:
+    """生成含文本和表格的最小 PDF。    Build a minimal PDF with text and a table for testing."""
+
+    from fpdf import FPDF
+
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=12)
+    pdf.cell(text="City Economic Report 2025")
+    pdf.ln(10)
+
+    # Table
+    headers = ["City", "GDP", "Population"]
+    rows = [
+        ["Shanghai", "56708.71", "2487.45"],
+        ["Beijing", "52073.40", "2185.30"],
+    ]
+    col_width = 50
+    pdf.set_font("Helvetica", "B", 10)
+    for header in headers:
+        pdf.cell(col_width, 8, header, border=1)
+    pdf.ln()
+    pdf.set_font("Helvetica", size=10)
+    for row in rows:
+        for cell in row:
+            pdf.cell(col_width, 8, cell, border=1)
+        pdf.ln()
+
+    return bytes(pdf.output())

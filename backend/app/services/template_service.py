@@ -6,6 +6,7 @@ from pathlib import Path
 from time import perf_counter
 
 from app.core.config import Settings
+from app.core.logging import ErrorCode, get_logger, log_operation
 from app.core.openai_client import OpenAIClientError, OpenAICompatibleClient
 from app.models.domain import (
     DocumentRecord,
@@ -64,6 +65,8 @@ class TemplateService:
     """处理模板上传、模板理解、文档匹配和单元格级回填。
     Handle template uploads, template understanding, document matching and cell-level filling.
     """
+
+    _logger = get_logger("template_service")
 
     def __init__(
         self,
@@ -154,6 +157,33 @@ class TemplateService:
         """同步执行一次模板回填并返回结果。
         Execute one template fill synchronously and return the result.
         """
+        with log_operation(self._logger, "template_fill", task_id=task_id):
+            return self._fill_template_once_inner(
+                task_id=task_id,
+                template_name=template_name,
+                template_path=template_path,
+                fill_mode=fill_mode,
+                document_ids=document_ids,
+                output_file_name=output_file_name,
+                persist_result=persist_result,
+                user_requirement=user_requirement,
+            )
+
+    def _fill_template_once_inner(
+        self,
+        *,
+        task_id: str,
+        template_name: str,
+        template_path: Path,
+        fill_mode: str,
+        document_ids: list[str],
+        output_file_name: str | None = None,
+        persist_result: bool = True,
+        user_requirement: str = "",
+    ) -> TemplateResultRecord:
+        """同步执行一次模板回填并返回结果。
+        Execute one template fill synchronously and return the result.
+        """
         suffix = template_path.suffix.lower()
         if suffix not in {".xlsx", ".docx"}:
             raise ValueError(f"Unsupported template type: {suffix}")
@@ -198,6 +228,7 @@ class TemplateService:
             fill_mode=fill_mode,
             document_ids=document_ids,
             filled_cells=filled_cells,
+            warnings=self._verify_filled_cells(filled_cells, facts),
         )
         if persist_result:
             self._repository.save_template_result(result)
@@ -246,6 +277,33 @@ class TemplateService:
             group["__entity__"] = type("_EntityHolder", (), {"entity_name": entity})()  # type: ignore[arg-type]
             result.append(group)
         return result
+
+    @staticmethod
+    def _verify_filled_cells(
+        filled_cells: list[FilledCellRecord],
+        facts: list[FactRecord],
+    ) -> list[str]:
+        """校验回填值的合理性，返回警告列表。
+        Verify that filled values are reasonable and return a list of warnings."""
+        warnings: list[str] = []
+        fact_by_id = {fact.fact_id: fact for fact in facts}
+        for cell in filled_cells:
+            fact = fact_by_id.get(cell.fact_id)
+            if fact is None:
+                continue
+            # Check for suspicious numeric magnitude
+            if fact.value_num is not None:
+                if fact.value_num < 0 and fact.field_name not in ("增长率", "增速"):
+                    warnings.append(f"{cell.cell_ref}: {fact.field_name} 值为负数 ({fact.value_num})，请核查")
+                if abs(fact.value_num) > 1e12:
+                    warnings.append(f"{cell.cell_ref}: {fact.field_name} 值极大 ({fact.value_num})，可能存在单位换算问题")
+            # Check year reasonableness
+            if fact.year is not None and (fact.year < 1950 or fact.year > 2030):
+                warnings.append(f"{cell.cell_ref}: 年份 {fact.year} 超出合理范围 [1950, 2030]")
+            # Check low confidence
+            if fact.confidence is not None and fact.confidence < 0.6:
+                warnings.append(f"{cell.cell_ref}: {fact.field_name} 置信度仅 {fact.confidence:.2f}，建议复核")
+        return warnings
 
     def resolve_document_ids(
         self,
@@ -453,7 +511,13 @@ class TemplateService:
                 "你是文档融合系统中的模板匹配器。"
                 "你的任务是根据模板名称、模板表头和样本文本，选择最相关的源文档。"
                 "如果模板需要跨多个文档汇总，则可以返回多个 document_ids。"
-                "禁止返回候选列表中不存在的 document_id。"
+                "禁止返回候选列表中不存在的 document_id。\n\n"
+                "匹配原则：\n"
+                "1. 优先匹配实体名（城市名、地区、机构）一致的文档。\n"
+                "2. 其次匹配字段名（GDP、常住人口、AQI 等）重合度高的文档。\n"
+                "3. 若模板涉及多城市汇总，可选多个文档。\n"
+                "4. 若模板涉及时间过滤（如 2020/7/1~2020/8/31），选择含该时段数据的文档。\n"
+                "5. 文档名或文本摘要中包含模板关键词的优先。\n"
             ),
             user_prompt=(
                 f"模板画像:\n{profile}\n\n"
@@ -675,10 +739,19 @@ class TemplateService:
     def _build_fact_lookup(self, facts: list[object]) -> dict[tuple[str, str], object]:
         """构建实体字段到事实的最高置信度索引。
         Build a highest-confidence fact index keyed by entity and field.
+        Register both with and without "市" suffix for robust city matching.
         """
         fact_lookup: dict[tuple[str, str], object] = {}
         for fact in sorted(facts, key=lambda item: item.confidence, reverse=True):
             fact_lookup.setdefault((fact.entity_name, fact.field_name), fact)
+            # Also register the "市" variant for city entity matching
+            entity = fact.entity_name
+            if entity:
+                if entity.endswith("市"):
+                    alt = entity[:-1]
+                else:
+                    alt = entity + "市"
+                fact_lookup.setdefault((alt, fact.field_name), fact)
         return fact_lookup
 
     def _fill_xlsx_template(
@@ -842,6 +915,7 @@ class TemplateService:
                 filled_cells.append(FilledCellRecord(
                     sheet_name=sheet.name, cell_ref=cell_ref, entity_name=entity_name,
                     field_name=field_name, value=cell_value, fact_id=fact.fact_id, confidence=fact.confidence,
+                    evidence_text=fact.source_span[:200] if fact.source_span else "",
                 ))
 
         # If we have row_groups (multi-row data like COVID-19), use them for empty templates
@@ -925,6 +999,7 @@ class TemplateService:
                 filled_cells.append(FilledCellRecord(
                     sheet_name=table.name, cell_ref=f"R{row_index}C{column_index}", entity_name=entity_name,
                     field_name=field_name, value=cell_value, fact_id=fact.fact_id, confidence=fact.confidence,
+                    evidence_text=fact.source_span[:200] if fact.source_span else "",
                 ))
 
         # Standard flow: fill existing rows then append unassigned entities

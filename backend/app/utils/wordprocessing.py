@@ -59,7 +59,8 @@ def _w(tag: str) -> str:
 
 
 def load_docx_tables(path: str | Path) -> WordDocument:
-    """读取 DOCX 中的表格结构。    Read DOCX table structures into memory."""
+    """读取 DOCX 中的表格结构，正确处理合并单元格。
+    Read DOCX table structures into memory, handling merged cells correctly."""
 
     docx_path = Path(path)
     with zipfile.ZipFile(docx_path, "r") as archive:
@@ -69,7 +70,40 @@ def load_docx_tables(path: str | Path) -> WordDocument:
     for table_index, table_el in enumerate(root.findall(".//w:tbl", W), start=1):
         rows: list[WordTableRow] = []
         for row_index, row_el in enumerate(table_el.findall("w:tr", W), start=1):
-            values = [_text_from_element(cell_el).strip() for cell_el in row_el.findall("w:tc", W)]
+            values: list[str] = []
+            logical_col = 0
+            for cell_el in row_el.findall("w:tc", W):
+                tc_pr = cell_el.find("w:tcPr", W)
+                # Check for vertical merge continuation — skip these cells' content
+                v_merge = tc_pr.find("w:vMerge", W) if tc_pr is not None else None
+                is_v_merge_continue = False
+                if v_merge is not None:
+                    # val="restart" means this is the start; no val or val="continue" means continuation
+                    val = v_merge.get(_w("val"), "")
+                    if val != "restart":
+                        is_v_merge_continue = True
+
+                # Determine horizontal span from gridSpan
+                grid_span = 1
+                if tc_pr is not None:
+                    gs_el = tc_pr.find("w:gridSpan", W)
+                    if gs_el is not None:
+                        try:
+                            grid_span = int(gs_el.get(_w("val"), "1"))
+                        except (ValueError, TypeError):
+                            grid_span = 1
+
+                text = "" if is_v_merge_continue else _text_from_element(cell_el).strip()
+
+                # Fill values list up to logical_col, then place text at this position
+                while len(values) < logical_col:
+                    values.append("")
+                values.append(text)
+                # For gridSpan > 1, fill remaining spanned columns with empty strings
+                for _ in range(grid_span - 1):
+                    values.append("")
+                logical_col += grid_span
+
             rows.append(WordTableRow(row_index=row_index, values=values))
         tables.append(WordTable(table_index=table_index, name=f"table_{table_index}", rows=rows))
     return WordDocument(tables=tables)
@@ -206,6 +240,12 @@ def _get_or_create_table_row(table_el: ET.Element, row_index: int, column_count:
             new_row = deepcopy(rows[-1])
             for cell_el in new_row.findall("w:tc", W):
                 _set_cell_text(cell_el, "")
+                # Clear vMerge from cloned cells to prevent structural corruption
+                tc_pr = cell_el.find("w:tcPr", W)
+                if tc_pr is not None:
+                    v_merge = tc_pr.find("w:vMerge", W)
+                    if v_merge is not None:
+                        tc_pr.remove(v_merge)
         else:
             new_row = _new_empty_row(column_count)
         table_el.append(new_row)

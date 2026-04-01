@@ -4,6 +4,9 @@ import type {
   AgentChatResponse,
   AgentExecuteRequest,
   AgentExecuteResponse,
+  ConversationCreateRequest,
+  ConversationResponse,
+  ConversationUpdateRequest,
   DownloadFileResult,
 } from '@/services/types';
 
@@ -64,4 +67,52 @@ export async function runAgentExecute(payload: AgentExecuteRequest): Promise<Age
 
 export async function downloadAgentArtifact(fileName: string): Promise<DownloadFileResult> {
   return requestFile(`/api/v1/agent/artifacts/${encodeURIComponent(fileName)}`);
+}
+
+export async function clearAgentConversation(contextId: string): Promise<void> {
+  await requestJson<{ context_id: string; cleared: boolean }>(
+    `/api/v1/agent/conversations/${encodeURIComponent(contextId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+// ── Conversation CRUD ──
+
+export async function listConversations(): Promise<ConversationResponse[]> {
+  return requestJson<ConversationResponse[]>('/api/v1/agent/conversations');
+}
+
+export async function createConversation(payload?: ConversationCreateRequest): Promise<ConversationResponse> {
+  return requestJson<ConversationResponse>('/api/v1/agent/conversations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload ?? {}),
+  });
+}
+
+export async function getConversation(conversationId: string): Promise<ConversationResponse> {
+  return requestJson<ConversationResponse>(
+    `/api/v1/agent/conversations/${encodeURIComponent(conversationId)}`,
+  );
+}
+
+export async function updateConversation(
+  conversationId: string,
+  payload: ConversationUpdateRequest,
+): Promise<ConversationResponse> {
+  return requestJson<ConversationResponse>(
+    `/api/v1/agent/conversations/${encodeURIComponent(conversationId)}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function deleteConversation(conversationId: string): Promise<void> {
+  await requestJson<{ context_id: string; cleared: boolean }>(
+    `/api/v1/agent/conversations/${encodeURIComponent(conversationId)}`,
+    { method: 'DELETE' },
+  );
 }

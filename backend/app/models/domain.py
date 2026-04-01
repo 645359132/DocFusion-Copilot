@@ -122,6 +122,7 @@ class FilledCellRecord:
     value: str | float | int
     fact_id: str
     confidence: float
+    evidence_text: str = ""
 
 
 @dataclass(slots=True)
@@ -138,3 +139,18 @@ class TemplateResultRecord:
     fill_mode: str
     document_ids: list[str]
     filled_cells: list[FilledCellRecord] = field(default_factory=list)
+    warnings: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
+class ConversationRecord:
+    """对话历史记录。
+    Persistent conversation history record.
+    """
+
+    conversation_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    messages: list[dict[str, object]] = field(default_factory=list)
+    metadata: dict[str, object] = field(default_factory=dict)

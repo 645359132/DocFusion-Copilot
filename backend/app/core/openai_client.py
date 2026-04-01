@@ -54,17 +54,19 @@ class OpenAICompatibleClient:
         user_prompt: str,
         json_schema: dict[str, Any] | None = None,
         temperature: float = 0.0,
+        extra_messages: list[dict[str, str]] | None = None,
     ) -> dict[str, Any]:
         if not self.is_configured or self._raw_client is None:
             raise OpenAIClientError("OpenAI client is not configured.")
         try:
+            messages: list[dict[str, str]] = [{"role": "system", "content": system_prompt}]
+            if extra_messages:
+                messages.extend(extra_messages)
+            messages.append({"role": "user", "content": user_prompt})
             kwargs: dict[str, Any] = {
                 "model": self.model,
                 "temperature": temperature,
-                "messages": [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
+                "messages": messages,
             }
             if json_schema is not None:
                 kwargs["response_format"] = {

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { getFactTrace } from '@/services';
-import type { DocumentResponse, FactTraceResponse, TaskResponse } from '@/services';
+import type { AgentExecuteResponse, ConversationResponse, DocumentResponse, FactTraceResponse, TaskResponse } from '@/services';
 
 type ToastTone = 'success' | 'error' | 'info';
 
@@ -26,6 +26,11 @@ type TracePanelState = {
   data: FactTraceResponse | null;
 };
 
+export type ChatMessage =
+  | { role: 'user'; text: string; timestamp: number }
+  | { role: 'assistant'; text: string; timestamp: number; data?: AgentExecuteResponse | null; taskId?: string }
+  | { role: 'system'; text: string; timestamp: number };
+
 type UiState = {
   uploadedDocuments: UploadedDocumentEntry[];
   currentDocumentSetId: string | null;
@@ -47,6 +52,17 @@ type UiState = {
   pushToast: (toast: Omit<ToastItem, 'id'>) => void;
   dismissToast: (toastId: string) => void;
   clearFileCache: () => void;
+  removeUploadedDocument: (docId: string) => void;
+  agentMessages: ChatMessage[];
+  agentContextId: string | null;
+  addAgentMessage: (msg: ChatMessage) => void;
+  setAgentContextId: (id: string | null) => void;
+  clearAgentConversation: () => void;
+  conversationList: ConversationResponse[];
+  setConversationList: (list: ConversationResponse[]) => void;
+  switchConversation: (conv: ConversationResponse) => void;
+  startNewConversation: () => void;
+  removeConversationFromList: (conversationId: string) => void;
 };
 
 export const useUiStore = create<UiState>((set) => ({
@@ -166,4 +182,47 @@ export const useUiStore = create<UiState>((set) => ({
       latestDocumentTaskId: null,
       latestTemplateTaskId: null,
     }),
+  removeUploadedDocument: (docId) =>
+    set((state) => ({
+      uploadedDocuments: state.uploadedDocuments.filter((item) => item.document.doc_id !== docId),
+    })),
+  agentMessages: [
+    { role: 'system' as const, text: '欢迎使用 DocFusion Agent。上传模板文件并输入需求，或直接输入自然语言指令。', timestamp: Date.now() },
+  ],
+  agentContextId: null,
+  addAgentMessage: (msg) =>
+    set((state) => ({ agentMessages: [...state.agentMessages, msg] })),
+  setAgentContextId: (id) => set({ agentContextId: id }),
+  clearAgentConversation: () =>
+    set({
+      agentMessages: [
+        { role: 'system' as const, text: '欢迎使用 DocFusion Agent。上传模板文件并输入需求，或直接输入自然语言指令。', timestamp: Date.now() },
+      ],
+      agentContextId: null,
+    }),
+  conversationList: [],
+  setConversationList: (list) => set({ conversationList: list }),
+  switchConversation: (conv) =>
+    set(() => {
+      const restored: ChatMessage[] = [
+        { role: 'system' as const, text: '欢迎使用 DocFusion Agent。上传模板文件并输入需求，或直接输入自然语言指令。', timestamp: new Date(conv.created_at).getTime() },
+        ...conv.messages.map((m) => ({
+          role: (String(m.role) === 'user' ? 'user' : 'assistant') as 'user' | 'assistant',
+          text: String(m.content ?? ''),
+          timestamp: Date.now(),
+        })),
+      ];
+      return { agentMessages: restored, agentContextId: conv.conversation_id };
+    }),
+  startNewConversation: () =>
+    set({
+      agentMessages: [
+        { role: 'system' as const, text: '欢迎使用 DocFusion Agent。上传模板文件并输入需求，或直接输入自然语言指令。', timestamp: Date.now() },
+      ],
+      agentContextId: null,
+    }),
+  removeConversationFromList: (conversationId) =>
+    set((state) => ({
+      conversationList: state.conversationList.filter((c) => c.conversation_id !== conversationId),
+    })),
 }));

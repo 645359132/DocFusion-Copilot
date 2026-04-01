@@ -10,7 +10,7 @@
 
 ### 核心目标
 
-将 docx / md / xlsx / txt 多源非结构化文档自动解析为结构化事实（Fact），存入 PostgreSQL 数据库，再根据用户上传的 Word / Excel 模板自动理解表头语义、查询事实库并回填，同时支持通过自然语言指令对文档进行操作。
+将 docx / md / xlsx / txt / pdf 多源非结构化文档自动解析为结构化事实（Fact），存入 PostgreSQL 数据库，再根据用户上传的 Word / Excel 模板自动理解表头语义、查询事实库并回填，同时支持通过自然语言指令对文档进行操作、原始文件在线预览、以及可持久化的多轮对话。
 
 ### 比赛评价方式
 
@@ -129,22 +129,84 @@
 - 指定字段抽取并导出
 - 结果导出为 Word / Excel / JSON
 
+### 需求 6：大文档预览性能优化（虚拟滚动）
+
+上传大 XLSX 等文件后，文档预览中栏加载数百甚至上千个 Block，全量渲染 DOM 导致页面卡顿。需要实现虚拟滚动（只渲染可视区域的 Block），保证大文档浏览体验流畅。
+
+### 需求 7：支持 PDF 文件上传与解析
+
+当前仅支持 .docx / .md / .txt / .xlsx，需要新增 PDF 文件的上传和结构化解析能力（逐页提取文本和表格），使系统覆盖更多文档格式。
+
+### 需求 8：原始文件在线预览（PDF / MD / TXT）
+
+当前中栏只展示解析后的 Block 列表，用户无法查看文档原貌。需要新增"原文预览"视图，按文件类型分发渲染：
+- **PDF**：使用 react-pdf 逐页渲染（已安装未使用）
+- **MD**：使用 react-markdown 渲染 Markdown 原文
+- **TXT**：`<pre>` 标签展示原始文本
+- **XLSX / DOCX**：暂不实现原文预览，后续扩展
+
+> 注：用户提到的 `parse-file-ui` 是 103MB 的完整 UMI 应用，不适合作为依赖引入，参考其思路自行实现轻量版。
+
+### 需求 9：对话历史持久化 + 会话管理侧边栏
+
+当前对话记忆仅存在于后端内存和前端 Zustand（进程重启 / 页面刷新即丢失）。需要：
+- 后端：对话存入 PostgreSQL，支持列表 / 新建 / 加载 / 删除
+- 前端：Agent 页左侧新增可收起的会话列表侧边栏（类似 ChatGPT），支持新建对话、切换历史对话、删除对话
+
+### 需求 10：AI API 智能度提升（讨论项）
+
+用户反馈本地 AI API 不够智能。分析：
+- **不是模型训练数据问题**——DeepSeek-chat 是通用大模型，能力本身足够
+- **主要瓶颈在 prompt 工程**：当前意图识别用简单关键词匹配 + 单次 LLM 调用，复杂指令（多步推理、条件判断、跨文档关联）需要更精细的 prompt 或 multi-agent 编排
+- **可改进方向**：丰富 system prompt + few-shot 示例、传入更多对话上下文（需求 9 完成后自然改善）、复杂任务拆解为 plan→execute→verify 多步调用、考虑换用推理增强模型（如 DeepSeek-R1）
+- **规则优先**：对数值、年份、单位字段优先使用规则 / 结构化提取，LLM 只做语义补充，不做最终数值决定
+
+### 需求 11：Benchmark 评测矩阵与误差分析
+
+比赛以准确率 ≥ 80%、响应时间 ≤ 90 秒为硬指标。当前虽有 BenchmarkService，但缺乏系统化的评测流程：
+- 按 5 docx / 3 md / 5 xlsx / 3 txt 完整跑一遍全流程（上传 → 解析 → 抽取 → 回填），逐模板记录准确率和耗时
+- 建立误差分析表：按 **实体识别** / **字段归一化** / **单位换算** / **模板定位** / **合并单元格** / **LLM 误判** 分类统计，定向修复
+- 设定基准线并在每次代码修改后回归验证
+
+### 需求 12：回归测试与质量保障
+
+当前后端 15 个 pytest 覆盖了核心流程，但以下场景无测试：
+- PDF 解析、DOCX 合并单元格、row_groups 多行填充、Agent 问答分支、对话 CRUD
+- 前端无任何自动化测试，上传 → 解析 → 预览 → 回填 → 下载主链路无保障
+- 缺乏结构化日志和错误码，赛前排障困难
+
+### 需求 13：数据追溯与复核增强
+
+赛题要求"可追溯输出"，当前 TraceService 已实现基础追溯，但需强化：
+- 所有回填结果在 UI 和导出中能回溯到 source_doc → block → evidence_text → confidence
+- 低置信度 Fact 需要筛选 + 标记 + 人工复核 + 重新回填闭环
+- document_set 级别管理：一次上传批次绑定为一组，支持快照与复现
+
+### 需求 14：部署、演示与交付就绪
+
+比赛需提交：项目概要（500 字以内）、PPT、详细方案、创新点说明、素材来源、Demo 程序、演示视频。当前缺乏：
+- 一键启动方案（docker compose 或启动脚本），确保评委机器可快速跑通
+- health check / .env.example / 数据库初始化 / seed demo 数据 文档
+- 演示兜底：准备 1 套稳定 Demo 数据、1 套录屏、1 套降级演示脚本（LLM 超时或网络抖动时仍能展示）
+- 提交材料映射表，确保每项交付物齐全
+
 ---
 
 ## 四、开发 TODO
 
 ### 4.1 后端 TODO
 
-#### B-1：文档删除接口
-- [ ] `DELETE /api/v1/documents/{doc_id}` — 删除文档及其关联 Block、Fact（级联删除）
+#### B-1：文档删除接口 ✅
+- [x] `DELETE /api/v1/documents/{doc_id}` — 删除文档及其关联 Block、Fact（级联删除）
 - [ ] `DELETE /api/v1/documents/batch` — 批量删除（可选）
-- [ ] Repository 层实现 `delete_document(doc_id)` 方法
-- [ ] 同时删除 storage/uploads/ 中的物理文件
+- [x] Repository 层实现 `delete_document(doc_id)` 方法（Protocol + PostgresRepository + InMemoryRepository）
+- [x] 同时删除 storage/uploads/ 中的物理文件
 
-#### B-2：Agent 对话记忆 / 上下文管理
-- [ ] 新增 `conversation_history` 存储（内存字典或数据库表），按 context_id 维护多轮对话历史
-- [ ] `/agent/chat` 和 `/agent/execute` 将历史消息传入 LLM 上下文
-- [ ] 超长对话自动截断或摘要压缩
+#### B-2：Agent 对话记忆 / 上下文管理 ✅
+- [x] 新增 `_conversations` 内存字典，按 context_id 维护多轮对话历史
+- [x] `/agent/chat` 和 `/agent/execute` 将历史消息传入 LLM 上下文（`extra_messages` 参数）
+- [x] 超长对话自动截断（40 条截到 30 条，LLM 上下文窗口 20 条）
+- [x] `DELETE /api/v1/agent/conversations/{context_id}` 清空对话端点
 
 #### B-3：Agent 自然语言问答分支
 - [ ] AgentService 意图识别新增 `query_status` / `summarize` / `general_qa` 等意图类型
@@ -152,43 +214,182 @@
 - [ ] 问答类返回纯文本 summary 而非 artifacts
 
 #### B-4：文档智能操作完善
-- [ ] DocumentInteractionService 增强 reformat：支持指定标题级别 + 字体 + 字号的格式调整
-- [ ] 增强 edit：支持批量文本替换、段落增删
+- [ ] DocumentInteractionService 增强 reformat：支持 LLM 解析用户格式要求（标题级别 + 字体 + 字号）
+- [ ] 增强 edit：支持批量文本替换、LLM 辅助理解复杂编辑指令
 - [ ] 增强 extract：支持用户自然语言指定要提取的实体/字段，返回结构化结果
-- [ ] 新增 export：将提取结果导出为 xlsx / docx / json 文件
+- [ ] 新增 export：将提取结果导出为 xlsx / docx / json 文件（参考 openpyxl + python-docx XML 模式）
 - [ ] 各操作产生的 artifact 支持前端下载
+- [ ] Agent 意图扩充：`extract_fields` / `export_results` 加入 INTENT_KEYWORDS
+
+#### B-5：DOCX 模板回填能力修复（Critical）
+- [ ] `_build_docx_table_updates` 补齐 row_groups 多行填充逻辑（从 XLSX 版 `_build_sheet_updates` 移植）
+- [ ] `load_docx_tables` 增加 gridSpan（水平合并）+ vMerge（垂直合并）合并单元格检测
+- [ ] `DocxParser` 表格解析同步处理合并单元格，正确计算逻辑列位置
+- [ ] `_get_or_create_table_row` 克隆行时清除 vMerge 属性，防止输出文件结构损坏
+- [ ] `CITY_NAMES` 扩充：添加测试集中出现的城市（德州/潍坊/临沂/合肥等地级市）
+- [ ] `fact_lookup` 构建时同时注册带"市"和不带"市"两个 key，提升实体匹配命中率
+- [ ] `_detect_layout` 中实体匹配同时尝试带"市"和不带"市"的变体
+
+#### B-6：PDF 文件解析支持
+- [ ] `requirements.txt` 添加 `pdfplumber`
+- [ ] 新建 `backend/app/parsers/pdf_parser.py`：继承 `DocumentParser`，`supported_suffixes = (".pdf",)`
+- [ ] `parse()` 方法：pdfplumber 逐页提取文本，每页生成一个 Block（block_type="page"，page_or_index=页码）
+- [ ] 表格识别：`page.extract_tables()` 每个表格生成 table_row Block
+- [ ] `factory.py` registry 添加 `PdfParser()` 实例
+- [ ] `config.py` → `supported_document_extensions` 添加 `".pdf"`
+
+#### B-7：原始文件下载端点
+- [ ] 新增 `GET /api/v1/documents/{doc_id}/raw` — 返回 `FileResponse`，用于前端原文预览
+- [ ] 安全校验：仅返回已上传且存在于 storage/uploads/ 的文件
+
+#### B-8：对话历史持久化（数据库存储）
+- [ ] `sqlalchemy_models.py` 新增 `ConversationRow` 模型：`conversation_id`(PK) / `title` / `created_at` / `updated_at` / `messages`(JSONB) / `metadata`(JSONB)
+- [ ] `base.py` Protocol 新增对话 CRUD 方法：`create_conversation` / `update_conversation` / `list_conversations` / `get_conversation` / `delete_conversation`
+- [ ] `postgres.py` 实现上述方法
+- [ ] 新增端点：`GET /api/v1/agent/conversations`（列表，按 updated_at DESC）、`POST /api/v1/agent/conversations`（新建）、`GET /api/v1/agent/conversations/{id}`（详情+messages）、`PUT /api/v1/agent/conversations/{id}`（更新）
+- [ ] `AgentService._conversations` 内存字典改为 DB 读写，发送消息时同步 persist
+- [ ] 自动标题生成：首条用户消息截断前 30 字作为对话标题
+
+#### B-9：Benchmark 评测矩阵
+- [ ] 编写 benchmark runner 脚本：批量上传测试集文档 → 逐个模板回填 → 与标准答案比对 → 输出准确率 + 耗时报表
+- [ ] 误差分类统计：实体识别错误 / 字段归一化错误 / 单位换算错误 / 模板定位错误 / 合并单元格错误 / LLM 误判
+- [ ] 输出 JSON + Markdown 格式的评测报告，方便版本间对比
+- [ ] 集成到 pytest：`test_benchmark_full_pipeline` 跑完后 assert 准确率 ≥ 基准线
+
+#### B-10：结构化日志与错误码
+- [ ] 关键服务（FactExtraction / TemplateService / AgentService）添加结构化日志（JSON 格式，含 request_id / doc_id / duration / error_code）
+- [ ] 定义统一错误码体系（E1xxx 解析错误 / E2xxx 抽取错误 / E3xxx 回填错误 / E4xxx Agent 错误）
+- [ ] 错误响应包含 error_code + human_readable message，方便赛前排障
+
+#### B-11：Fact 追溯强化 + 低置信度复核
+- [ ] 回填结果中每个单元格附带 fact_id + confidence + evidence_text 元信息
+- [ ] 新增 `GET /api/v1/facts/low-confidence?threshold=0.7` — 筛选低置信度 Fact 列表
+- [ ] 新增 `PUT /api/v1/facts/{fact_id}/review` — 人工确认 / 修正 / 拒绝
+- [ ] 复核后可触发局部重新回填（仅影响该 Fact 关联的模板单元格）
+
+#### B-12：document_set 快照管理
+- [ ] 新增 `document_sets` 表：`set_id` / `name` / `created_at` / `document_ids`(ARRAY)
+- [ ] 上传批次自动创建 document_set，后续可按 set 维度重跑 benchmark
+- [ ] 新增端点：`POST /api/v1/document-sets`（创建）、`GET /api/v1/document-sets`（列表）、`GET /api/v1/document-sets/{id}`（详情）
+
+#### B-13：LLM Prompt 工程增强
+- [ ] 为 Agent 意图识别和模板填充补充 few-shot 示例集（≥5 条典型示例）
+- [ ] 复杂任务拆解为 plan → retrieve → execute → verify 四步管道，避免单次调用承担全部理解负担
+- [ ] 对数值、年份、单位字段优先规则 / 结构化提取，LLM 仅做语义补充
+- [ ] 回填时增加 verify 步骤：LLM 自检填充值是否合理（数量级、单位、年份范围）
 
 ---
 
 ### 4.2 前端 TODO
 
-#### F-1：文档删除功能
-- [ ] WorkspacePage 文件列表项增加删除按钮（Trash2 图标）
-- [ ] 删除前弹出确认提示（防误删）
-- [ ] 调用 `DELETE /api/v1/documents/{doc_id}` 接口
-- [ ] 删除成功后刷新文档列表，toast 提示
-- [ ] services/ 新增 `deleteDocument(docId)` 函数
+#### F-1：文档删除功能 ✅
+- [x] WorkspacePage 文件列表项增加删除按钮（Trash2 图标，hover 时显示）
+- [x] 删除前弹出 window.confirm 确认提示（防误删）
+- [x] 调用 `DELETE /api/v1/documents/{doc_id}` 接口
+- [x] 删除成功后刷新文档列表，toast 提示，清理选中状态
+- [x] services/documentDetails.ts 新增 `deleteDocument(docId)` 函数
+- [x] uiStore 新增 `removeUploadedDocument(docId)` action
 
-#### F-2：Agent 页对话记忆 + 页面切换保持
-- [ ] 将 AgentPage 的 messages 状态提升到 Zustand uiStore 中
-- [ ] 页面切换时不销毁对话状态
-- [ ] 增加"清空对话"按钮
+#### F-2：Agent 页对话记忆 + 页面切换保持 ✅
+- [x] 将 AgentPage 的 messages 状态提升到 Zustand uiStore 中（`agentMessages` + `agentContextId`）
+- [x] 页面切换时不销毁对话状态（Zustand 持久化）
+- [x] 增加"清空对话"按钮（RotateCcw 图标 + 调用 clearAgentConversation API）
 
 #### F-3：Agent 自然语言问答
 - [ ] 修改 handleSend 逻辑：无 templateFile 时走 runAgentExecute，有 templateFile 时先判断意图再决定走回填还是 execute
 - [ ] Agent 返回的纯文本 summary 直接作为 assistant 消息展示
 - [ ] 支持 summarize / query / general_qa 类响应的展示
 
-#### F-4：Agent 对话输入框自适应高度
-- [ ] textarea 监听 input 事件，根据 scrollHeight 自动调整高度
-- [ ] min-height: 40px，max-height: 200px
-- [ ] 超过上限时显示滚动条
+#### F-4：Agent 对话输入框自适应高度 ✅
+- [x] textarea 通过 ref + onChange 动态调整 height = Math.min(scrollHeight, 200)
+- [x] min-height: 40px，max-height: 200px
+- [x] 超过上限时 overflow-y-auto 显示滚动条
+- [x] 发送后重置高度
 
 #### F-5：文档智能操作交互模块 UI
-- [ ] Agent 页支持文档操作类指令的展示（格式调整、文本替换、摘要等）
-- [ ] 操作结果以卡片形式展示（如"已将 12 处'甲方'替换为'委托方'"）
-- [ ] artifact 下载按钮对文档操作产物生效
+- [ ] AgentPage handleSend 对非 template_fill 的 agent 返回结果（summary / artifacts）直接在对话流中展示
+- [ ] 操作结果卡片展示：替换计数、摘要文本、提取字段表格、导出文件链接
+- [ ] artifact 下载按钮对 edit / reformat / extract / export 产物全部生效
 - [ ] 可选：WorkspacePage 右侧新增"文档操作"Tab
+
+#### F-6：大文档预览虚拟滚动
+- [ ] 安装 `@tanstack/react-virtual`
+- [ ] WorkspacePage 中栏 Block 列表用 `useVirtualizer` 替代 `blocks.map()` 全量渲染
+- [ ] 支持动态行高（`estimateSize` + `measureElement`）
+- [ ] 保持或适配 ScrollArea / 原生 overflow-auto（virtualizer 需要容器 ref）
+
+#### F-7：PDF 上传与 FileIcon 扩展
+- [ ] WorkspacePage 文件上传 `accept` 属性添加 `.pdf`
+- [ ] `FileIcon` 组件添加 PDF 图标（lucide-react `FileType` 或自定义颜色）
+
+#### F-8：原始文件在线预览组件
+- [ ] 安装 `react-markdown` + `remark-gfm`（`react-pdf` 已安装）
+- [ ] 新建 `frontend/src/components/FilePreview.tsx`：根据 docType 分发渲染
+  - PdfPreview：react-pdf `Document` / `Page` 组件，逐页滚动 + 缩放控制
+  - MarkdownPreview：fetch 原始文本 → `react-markdown` 渲染
+  - TextPreview：fetch 原始文本 → `<pre>` 展示
+- [ ] `services/` 新增 `getDocumentRawUrl(docId)` 函数
+- [ ] WorkspacePage 中栏顶部加 **"解析" / "预览"** Tab 切换
+- [ ] "预览" Tab 渲染 `<FilePreview docId={...} docType={...} />`
+
+#### F-9：对话历史侧边栏（会话管理）
+- [ ] `services/` 新增对话 CRUD API：`listConversations` / `createConversation` / `getConversation` / `updateConversation` / `deleteConversation`
+- [ ] `uiStore.ts` 新增状态：`conversations` 列表、`activeConversationId`、对话切换 action
+- [ ] AgentPage 左侧新增可折叠侧边栏（用 `ResizablePanel`）：
+  - 顶部 "新对话" 按钮
+  - 对话列表（标题 + 时间戳，点击切换）
+  - 每项 hover 显示删除按钮
+- [ ] 切换对话 → 加载该对话 messages → 渲染到聊天区域
+- [ ] 发送消息 → 同步更新到 DB（通过 PUT 端点）
+- [ ] 新对话时自动生成 conversation_id 并 POST 创建
+
+#### F-10：Fact 追溯与复核 UI
+- [ ] 回填结果表格中，每个单元格支持 hover 显示 fact_id / confidence / evidence_text
+- [ ] 低置信度单元格高亮标记（黄色背景 / 警告图标）
+- [ ] 点击低置信度 Fact → 弹出复核面板（确认 / 修正值 / 拒绝）
+- [ ] 复核完成后一键重新回填受影响的单元格
+
+---
+
+### 4.3 测试 TODO
+
+#### T-1：后端回归测试矩阵扩充
+- [ ] PDF 解析测试：上传 PDF → 验证 Block 生成（page 类型 + 表格类型）
+- [ ] DOCX 合并单元格测试：含 gridSpan / vMerge 的模板 → 验证列索引正确
+- [ ] row_groups 多行填充测试：空模板（仅表头）→ 验证数据行正确生成
+- [ ] Agent 问答分支测试：summarize / query_status / general_qa 意图 → 验证分发正确
+- [ ] 对话 CRUD 测试：创建 / 列表 / 获取 / 更新 / 删除对话
+- [ ] Fact 复核测试：低置信度筛选 → 人工修正 → 局部重回填
+
+#### T-2：前端 E2E 主链路测试
+- [ ] 安装 Playwright（或 Cypress）
+- [ ] 主链路覆盖：上传文档 → 等待解析完成 → 查看 Block 列表 → 上传模板 → 回填 → 下载结果
+- [ ] Agent 对话链路：输入自然语言 → 收到响应 → 上传模板 → 回填完成
+- [ ] 文档删除链路：删除文档 → 确认列表更新
+
+---
+
+### 4.4 部署与交付 TODO
+
+#### D-1：一键启动与部署
+- [ ] 编写 `docker-compose.yml`：PostgreSQL + Backend (FastAPI) + Frontend (Nginx / Vite preview)
+- [ ] 编写 `.env.example`：列出所有环境变量及注释
+- [ ] 编写 `scripts/init_db.py`：数据库初始化 + seed demo 数据（预置 2-3 个文档 + 对应 Fact）
+- [ ] `README.md` 添加快速启动指引（docker compose up 一条命令）
+- [ ] health check 端点 `GET /api/v1/health` 返回服务状态 + DB 连通性
+
+#### D-2：演示与提交材料准备
+- [ ] 准备 1 套稳定 Demo 数据集（已验证准确率 ≥ 80% 的文档 + 模板）
+- [ ] 录制演示视频脚本（涵盖三大模块：文档解析 → 模板回填 → 文档操作）
+- [ ] 降级演示方案：LLM 不可用时，从缓存 / 预计算结果展示（确保 Demo 不翻车）
+- [ ] 提交材料清单核验：
+  - [ ] 项目概要（500 字以内）
+  - [ ] 答辩 PPT
+  - [ ] 详细方案文档
+  - [ ] 创新点说明
+  - [ ] 素材来源声明
+  - [ ] Demo 程序（可运行包）
+  - [ ] 演示视频
 
 ---
 
@@ -196,8 +397,103 @@
 
 | 优先级 | 任务 | 原因 |
 |---|---|---|
-| **P0** | B-1 + F-1 文档删除 | 基础功能缺失，影响日常使用 |
-| **P0** | F-4 输入框自适应 | 体验问题，改动小，立即见效 |
+| ~~P0~~ | ~~B-1 + F-1 文档删除~~ | ✅ 已完成 |
+| ~~P0~~ | ~~F-4 输入框自适应~~ | ✅ 已完成 |
+| ~~P2~~ | ~~B-2 + F-2 对话记忆（内存版）~~ | ✅ 已完成 |
+| **P0** | **B-5 DOCX 回填修复** | 🔴 DOCX 模板回填能力严重不足，直接影响比赛得分 |
+| **P0** | **B-6 + F-7 PDF 解析** | 🔴 新增文件格式覆盖率直接影响赛题评分 |
+| **P1** | **F-6 大文档虚拟滚动** | 大 XLSX 预览卡顿严重影响演示体验 |
+| **P1** | **B-7 + F-8 原始文件预览** | 赛题展示加分项，react-pdf 已安装可快速实现 |
 | **P1** | B-3 + F-3 Agent 问答分支 | 赛题核心要求，当前 Agent 只能回填 |
 | **P1** | B-4 + F-5 文档智能操作 | 赛题三大必选模块之一 |
-| **P2** | B-2 + F-2 对话记忆 | 体验优化，非评分关键 |
+| **P2** | **B-8 + F-9 对话持久化 + 侧边栏** | 体验提升，DB 存储可作为技术亮点 |
+| **P1** | **B-9 Benchmark 评测矩阵** | 🔴 每次改动后需立即验证准确率未退步 |
+| **P1** | **B-13 LLM Prompt 工程增强** | 提升回填准确率的核心杠杆 |
+| **P2** | **B-10 结构化日志** | 赛前排障效率，降低 Demo 翻车风险 |
+| **P2** | **B-11 + F-10 Fact 追溯 + 复核** | 赛题强调"可追溯"，评分加分项 |
+| **P2** | **T-1 回归测试矩阵** | 保障新功能不破坏已有流程 |
+| **P2** | **D-1 一键启动 + 部署** | 评委运行便利性，Demo 稳定性 |
+| **P3** | **B-12 document_set 快照** | 批次管理，可复现评测 |
+| **P3** | **T-2 前端 E2E 测试** | 主链路自动化保障 |
+| **P3** | **D-2 演示与提交材料** | 答辩前集中准备 |
+| **P3** | 需求 10 AI 智能度提升 | 长期优化项，优先完善 prompt 工程 |
+
+### 建议实施顺序
+
+```
+第一批（P0 — 赛题保底分）
+  B-5 DOCX 回填修复
+  B-6 + F-7 PDF 解析
+
+第二批（P1 — 准确率 + 展示分）
+  B-9 Benchmark 评测矩阵        ← 越早建越好，后续改动靠它验证
+  B-13 LLM Prompt 工程增强       ← 直接提升准确率
+  F-6 大文档虚拟滚动             ← 独立，可随时插入
+  B-7 + F-8 原始文件预览          ← 依赖 B-6（PDF 解析完成后做）
+  B-3 + F-3 Agent 问答分支        ← 依赖 B-2 已完成
+  B-4 + F-5 文档智能操作          ← 最大工作量
+
+第三批（P2 — 质量 + 可追溯）
+  B-10 结构化日志                ← 赛前排障
+  B-11 + F-10 Fact 追溯 + 复核    ← 赛题"可追溯"加分
+  T-1 回归测试矩阵               ← 保障稳定性
+  D-1 一键启动 + 部署            ← 评委运行便利
+  B-8 + F-9 对话历史持久化 + 侧边栏
+
+第四批（P3 — 锦上添花）
+  B-12 document_set 快照
+  T-2 前端 E2E 测试
+  D-2 演示与提交材料准备
+  需求 10 prompt 工程持续迭代
+```
+
+---
+
+## 六、DOCX 回填问题分析
+
+### 根因分析
+
+| # | 严重度 | 问题 | 影响 |
+|---|--------|------|------|
+| 1 | 🔴 Critical | `_build_docx_table_updates` 缺少 row_groups 多行填充逻辑 | 空模板（仅表头无数据行）时 **0 条数据写入**，XLSX 有此逻辑而 DOCX 完全缺失 |
+| 2 | 🔴 Critical | 无 `gridSpan` / `w:vMerge` 合并单元格处理 | 中文模板常用合并单元格做多级表头，列索引错位导致数据写入错误位置 |
+| 3 | 🔴 Critical | `CITY_NAMES` 仅 20 个一线城市 | 测试集中的德州/潍坊/临沂/合肥等地级市无法被 `find_entity_mentions()` 从自由文本中识别 |
+| 4 | 🟡 High | `_get_or_create_table_row` 克隆行时携带 vMerge 属性 | 新增行继承合并标记，输出文件结构损坏 |
+| 5 | 🟡 High | 实体名 "市" 后缀不对称 | `normalize_entity_name` 去掉 "市"，但模板/fact_lookup 可能保留，导致 lookup miss |
+| 6 | 🟠 Medium | DOCX 不支持嵌套表格 | 仅处理 `<w:body>` 直接子元素的表格，嵌套在单元格中的表格被忽略 |
+
+### 修改方案
+
+**Phase 1 — DOCX 回填修复（核心 Bug）**
+
+| 步骤 | 修改 | 文件 |
+|------|------|------|
+| 1 | `_build_docx_table_updates` 补齐 row_groups（从 XLSX 版 `_build_sheet_updates` 移植 15 行代码） | `template_service.py` |
+| 2 | `load_docx_tables` 增加 gridSpan + vMerge 合并单元格检测，正确计算逻辑列 | `wordprocessing.py` |
+| 3 | `DocxParser` 表格解析同步处理合并单元格 | `docx_parser.py` |
+| 4 | `_get_or_create_table_row` 克隆行时清除 vMerge | `wordprocessing.py` |
+| 5 | `CITY_NAMES` 扩充测试集出现的城市 | `catalog.py` |
+
+**Phase 2 — 实体匹配健壮性**
+
+| 步骤 | 修改 | 文件 |
+|------|------|------|
+| 6 | `fact_lookup` 构建时同时注册带"市"和不带"市"两个 key | `template_service.py` |
+| 7 | entity matching 同时尝试带"市"和不带"市" | `normalizers.py` |
+
+**Phase 3 — 后端文档操作增强（B-4）**
+
+| 步骤 | 修改 | 文件 |
+|------|------|------|
+| 8 | `_reformat_documents` 增强：LLM 解析格式要求 | `document_interaction_service.py` |
+| 9 | `_edit_documents` 增强：LLM 辅助复杂编辑指令 | `document_interaction_service.py` |
+| 10 | 新增 `_extract_fields`：按用户指定实体/字段从事实库提取 | `document_interaction_service.py` |
+| 11 | 新增 `_export_results`：导出 xlsx / docx / json | `document_interaction_service.py` |
+| 12 | Agent 意图扩充 | `catalog.py` + `agent_service.py` |
+
+**Phase 4 — 前端文档操作 UI（F-5）**
+
+| 步骤 | 修改 | 文件 |
+|------|------|------|
+| 13 | AgentPage 非 template 结果展示 | `AgentPage.tsx` |
+| 14 | 操作结果卡片 + artifact 下载按钮 | `AgentPage.tsx` |

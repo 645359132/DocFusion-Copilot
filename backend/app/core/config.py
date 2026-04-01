@@ -138,7 +138,7 @@ class Settings:
         """返回允许上传的源文档扩展名列表。
         Return allowed extensions for source documents.
         """
-        return (".docx", ".md", ".txt", ".xlsx")
+        return (".docx", ".md", ".txt", ".xlsx", ".pdf")
 
     @property
     def supported_template_extensions(self) -> tuple[str, ...]:

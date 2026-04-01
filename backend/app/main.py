@@ -19,6 +19,7 @@ def _ensure_backend_on_sys_path() -> None:
 _ensure_backend_on_sys_path()
 
 from app.core.config import get_settings
+from app.core.logging import setup_structured_logging
 
 
 def create_app():
@@ -31,6 +32,7 @@ def create_app():
     from app.api.v1.router import api_router
     from app.core.container import get_container
 
+    setup_structured_logging()
     settings = get_settings()
     get_container()
     app = FastAPI(

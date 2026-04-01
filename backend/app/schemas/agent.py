@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import Field
 
 from app.schemas.common import APIModel, FactResponse
@@ -77,3 +79,39 @@ class AgentExecuteResponse(APIModel):
     task_id: str | None = None
     task_status: str | None = None
     template_name: str | None = None
+
+
+# ── Conversation schemas ──
+
+
+class ConversationMessagePayload(APIModel):
+    """对话消息体。"""
+
+    role: str
+    content: str
+
+
+class ConversationResponse(APIModel):
+    """对话记录返回体。"""
+
+    conversation_id: str
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    messages: list[dict[str, object]] = Field(default_factory=list)
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ConversationCreateRequest(APIModel):
+    """创建对话请求体。"""
+
+    title: str = ""
+    metadata: dict[str, object] = Field(default_factory=dict)
+
+
+class ConversationUpdateRequest(APIModel):
+    """更新对话请求体。"""
+
+    title: str | None = None
+    messages: list[dict[str, object]] | None = None
+    metadata: dict[str, object] | None = None

@@ -10,7 +10,7 @@ from app.models.domain import TaskRecord, TaskStatus, TaskType
 from app.repositories.base import Repository
 from app.services.template_service import TemplateService
 from app.tasks.executor import TaskExecutor
-from app.utils.evaluation import compare_filled_templates, evaluate_extracted_facts
+from app.utils.evaluation import compare_filled_templates, evaluate_extracted_facts, generate_benchmark_markdown
 from app.utils.files import safe_filename
 from app.utils.ids import new_id
 
@@ -156,6 +156,8 @@ class BenchmarkService:
             report["elapsed_seconds"] = round(perf_counter() - started_at, 4)
             report_path = self._settings.outputs_dir / f"{task_id}_fact_evaluation_report.json"
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            md_path = report_path.with_suffix(".md")
+            md_path.write_text(generate_benchmark_markdown(report), encoding="utf-8")
             self._repository.update_task(
                 task_id,
                 status=TaskStatus.succeeded,
@@ -225,6 +227,8 @@ class BenchmarkService:
             }
             report_path = self._settings.outputs_dir / f"{task_id}_template_benchmark_report.json"
             report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+            md_path = report_path.with_suffix(".md")
+            md_path.write_text(generate_benchmark_markdown(report), encoding="utf-8")
             self._repository.update_task(
                 task_id,
                 status=TaskStatus.succeeded,

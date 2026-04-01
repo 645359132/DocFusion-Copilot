@@ -1,10 +1,10 @@
 export { ApiError, API_BASE_URL } from '@/services/http';
-export { runAgentChat, runAgentExecute, downloadAgentArtifact } from '@/services/agent';
-export { listDocuments, getDocumentDetail, getDocumentBlocks, getDocumentFacts } from '@/services/documentDetails';
+export { runAgentChat, runAgentExecute, downloadAgentArtifact, clearAgentConversation, listConversations, createConversation, getConversation, updateConversation, deleteConversation } from '@/services/agent';
+export { listDocuments, getDocumentDetail, getDocumentBlocks, getDocumentFacts, deleteDocument, getDocumentRawUrl } from '@/services/documentDetails';
 export { uploadDocument, uploadDocumentBatch } from '@/services/documents';
 export { getTaskStatus } from '@/services/tasks';
 export { submitTemplateFill, downloadTemplateResult } from '@/services/templates';
-export { getFactTrace } from '@/services/trace';
+export { getFactTrace, listLowConfidenceFacts, reviewFact } from '@/services/trace';
 export type {
   AgentChatRequest,
   AgentChatResponse,
@@ -12,6 +12,7 @@ export type {
   AgentExecuteResponse,
   AgentExecutionArtifactResponse,
   BlockResponse,
+  ConversationResponse,
   DocumentBatchUploadAcceptedResponse,
   DocumentBatchUploadItemResponse,
   DocumentResponse,

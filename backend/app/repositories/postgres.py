@@ -93,6 +93,18 @@ class PostgresRepository:
                 stmt = stmt.where(DocumentRow.status == str(status))
             return [self._document_from_row(row) for row in session.scalars(stmt).all()]
 
+    def delete_document(self, doc_id: str) -> DocumentRecord | None:
+        """删除文档及关联的 Block 和 Fact（通过 FK CASCADE），返回被删除的文档记录。
+        Delete a document and cascade-remove blocks/facts via FK constraints.
+        """
+        with self._session() as session:
+            row = session.get(DocumentRow, doc_id)
+            if row is None:
+                return None
+            record = self._document_from_row(row)
+            session.delete(row)
+            return record
+
     def update_document(
         self,
         doc_id: str,

@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from app.models.domain import (
+    ConversationRecord,
     DocumentBlock,
     DocumentRecord,
     DocumentStatus,
@@ -130,3 +131,25 @@ class Repository(Protocol):
         """列出全部模板回填结果。
         List all template fill results.
         """
+
+    def delete_document(self, doc_id: str) -> DocumentRecord | None:
+        """删除文档及其关联的 Block 和 Fact（级联删除），返回被删除的文档记录。
+        Delete a document and cascade-remove its blocks and facts. Returns the deleted record or None.
+        """
+
+    # ── Conversation CRUD ──
+
+    def create_conversation(self, record: ConversationRecord) -> ConversationRecord:
+        """创建对话记录。    Persist a new conversation record."""
+
+    def get_conversation(self, conversation_id: str) -> ConversationRecord | None:
+        """按 id 查询对话记录。    Fetch a conversation by id."""
+
+    def update_conversation(self, record: ConversationRecord) -> ConversationRecord | None:
+        """更新对话记录。    Update an existing conversation record."""
+
+    def list_conversations(self) -> list[ConversationRecord]:
+        """列出全部对话，按更新时间倒序。    List all conversations ordered by updated_at DESC."""
+
+    def delete_conversation(self, conversation_id: str) -> ConversationRecord | None:
+        """删除对话记录。    Delete a conversation record."""

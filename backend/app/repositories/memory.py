@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from threading import RLock
 
 from app.models.domain import (
+    ConversationRecord,
     DocumentBlock,
     DocumentRecord,
     DocumentStatus,
@@ -32,6 +33,7 @@ class InMemoryRepository:
         self._facts: dict[str, FactRecord] = {}
         self._tasks: dict[str, TaskRecord] = {}
         self._template_results: dict[str, TemplateResultRecord] = {}
+        self._conversations: dict[str, ConversationRecord] = {}
 
     def add_document(self, record: DocumentRecord) -> DocumentRecord:
         """存储文档记录并返回脱离引用的副本。
@@ -58,6 +60,24 @@ class InMemoryRepository:
             if status is not None:
                 documents = [record for record in documents if record.status == status]
             return [replace(record) for record in documents]
+
+    def delete_document(self, doc_id: str) -> DocumentRecord | None:
+        """删除文档及其关联的 Block 和 Fact，返回被删除的记录。
+        Delete a document and its associated blocks and facts.
+        """
+        with self._lock:
+            record = self._documents.pop(doc_id, None)
+            if record is None:
+                return None
+            self._blocks_by_doc.pop(doc_id, None)
+            fact_ids_to_remove = [
+                fid for fid, fact in self._facts.items() if fact.source_doc_id == doc_id
+            ]
+            for fid in fact_ids_to_remove:
+                del self._facts[fid]
+            if fact_ids_to_remove:
+                self._recompute_canonical_flags()
+            return replace(record)
 
     def update_document(
         self,
@@ -242,6 +262,43 @@ class InMemoryRepository:
         """
         with self._lock:
             return [deepcopy(result) for result in self._template_results.values()]
+
+    # ── Conversation CRUD ──
+
+    def create_conversation(self, record: ConversationRecord) -> ConversationRecord:
+        """创建对话记录。    Persist a new conversation record."""
+        with self._lock:
+            self._conversations[record.conversation_id] = deepcopy(record)
+            return deepcopy(record)
+
+    def get_conversation(self, conversation_id: str) -> ConversationRecord | None:
+        """按 id 查询对话记录。    Fetch a conversation by id."""
+        with self._lock:
+            record = self._conversations.get(conversation_id)
+            return deepcopy(record) if record else None
+
+    def update_conversation(self, record: ConversationRecord) -> ConversationRecord | None:
+        """更新对话记录。    Update an existing conversation record."""
+        with self._lock:
+            if record.conversation_id not in self._conversations:
+                return None
+            self._conversations[record.conversation_id] = deepcopy(record)
+            return deepcopy(record)
+
+    def list_conversations(self) -> list[ConversationRecord]:
+        """列出全部对话，按更新时间倒序。    List all conversations ordered by updated_at DESC."""
+        with self._lock:
+            records = sorted(
+                self._conversations.values(),
+                key=lambda r: r.updated_at,
+                reverse=True,
+            )
+            return [deepcopy(r) for r in records]
+
+    def delete_conversation(self, conversation_id: str) -> ConversationRecord | None:
+        """删除对话记录。    Delete a conversation record."""
+        with self._lock:
+            return self._conversations.pop(conversation_id, None)
 
     def _recompute_canonical_flags(self) -> None:
         """将每个冲突组中置信度最高的事实标记为 canonical。

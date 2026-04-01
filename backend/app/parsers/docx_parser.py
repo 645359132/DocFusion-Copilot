@@ -81,9 +81,38 @@ class DocxParser(DocumentParser):
             rows = []
             for row_el in child.findall("w:tr", W):
                 row_values = []
+                logical_col = 0
                 for cell_el in row_el.findall("w:tc", W):
-                    value = "".join(node.text or "" for node in cell_el.findall(".//w:t", W)).strip()
+                    tc_pr = cell_el.find("w:tcPr", W)
+                    # Check for vertical merge continuation
+                    v_merge = tc_pr.find("w:vMerge", W) if tc_pr is not None else None
+                    is_v_merge_continue = False
+                    if v_merge is not None:
+                        val = v_merge.get(_w("val"), "")
+                        if val != "restart":
+                            is_v_merge_continue = True
+
+                    # Determine horizontal span
+                    grid_span = 1
+                    if tc_pr is not None:
+                        gs_el = tc_pr.find("w:gridSpan", W)
+                        if gs_el is not None:
+                            try:
+                                grid_span = int(gs_el.get(_w("val"), "1"))
+                            except (ValueError, TypeError):
+                                grid_span = 1
+
+                    value = "" if is_v_merge_continue else "".join(
+                        node.text or "" for node in cell_el.findall(".//w:t", W)
+                    ).strip()
+
+                    # Fill up to logical column position
+                    while len(row_values) < logical_col:
+                        row_values.append("")
                     row_values.append(value)
+                    for _ in range(grid_span - 1):
+                        row_values.append("")
+                    logical_col += grid_span
                 rows.append(row_values)
 
             if len(rows) < 2:

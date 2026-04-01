@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from datetime import datetime, timezone
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from starlette.datastructures import UploadFile
@@ -13,6 +15,9 @@ from app.schemas.agent import (
     AgentChatResponse,
     AgentExecuteRequest,
     AgentExecuteResponse,
+    ConversationCreateRequest,
+    ConversationResponse,
+    ConversationUpdateRequest,
 )
 
 router = APIRouter()
@@ -71,6 +76,69 @@ def download_artifact(file_name: str) -> FileResponse:
 
     media_type = _guess_media_type(artifact_path.suffix.lower())
     return FileResponse(path=artifact_path, filename=file_name, media_type=media_type)
+
+
+@router.delete("/conversations/{context_id}")
+def clear_conversation(context_id: str) -> dict:
+    """清空指定对话的历史记录。    Clear conversation history for a given context."""
+    get_container().agent_service.clear_conversation(context_id)
+    return {"context_id": context_id, "cleared": True}
+
+
+# ── Conversation CRUD ──
+
+@router.get("/conversations", response_model=list[ConversationResponse])
+def list_conversations() -> list[ConversationResponse]:
+    """列出全部对话记录（按更新时间倒序）。    List all conversations ordered by updated_at DESC."""
+    records = get_container().agent_service.list_conversations()
+    return [ConversationResponse.model_validate(r.__dict__) for r in records]
+
+
+@router.post("/conversations", response_model=ConversationResponse, status_code=201)
+def create_conversation(payload: ConversationCreateRequest) -> ConversationResponse:
+    """创建新对话。    Create a new conversation."""
+    from app.utils.ids import new_id
+    from app.models.domain import ConversationRecord
+
+    now = datetime.now(timezone.utc)
+    record = ConversationRecord(
+        conversation_id=new_id("conv"),
+        title=payload.title or "",
+        created_at=now,
+        updated_at=now,
+        metadata=dict(payload.metadata),
+    )
+    saved = get_container().repository.create_conversation(record)
+    return ConversationResponse.model_validate(saved.__dict__)
+
+
+@router.get("/conversations/{conversation_id}", response_model=ConversationResponse)
+def get_conversation(conversation_id: str) -> ConversationResponse:
+    """获取单个对话详情。    Get a single conversation by id."""
+    record = get_container().repository.get_conversation(conversation_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return ConversationResponse.model_validate(record.__dict__)
+
+
+@router.put("/conversations/{conversation_id}", response_model=ConversationResponse)
+def update_conversation(conversation_id: str, payload: ConversationUpdateRequest) -> ConversationResponse:
+    """更新对话。    Update an existing conversation."""
+    repo = get_container().repository
+    record = repo.get_conversation(conversation_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    if payload.title is not None:
+        record.title = payload.title
+    if payload.messages is not None:
+        record.messages = payload.messages
+    if payload.metadata is not None:
+        record.metadata = dict(payload.metadata)
+    record.updated_at = datetime.now(timezone.utc)
+    updated = repo.update_conversation(record)
+    if updated is None:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return ConversationResponse.model_validate(updated.__dict__)
 
 
 async def _parse_multipart_execute_request(request: Request) -> dict[str, object]:

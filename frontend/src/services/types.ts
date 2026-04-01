@@ -85,6 +85,7 @@ export interface FilledCellResponse {
   value: string | number;
   fact_id: string;
   confidence: number;
+  evidence_text?: string;
 }
 
 export interface TemplateResultResponse {
@@ -222,4 +223,26 @@ export interface TemplateFillRequest {
 export interface DownloadFileResult {
   blob: Blob;
   fileName: string;
+}
+
+// ── Conversation types ──
+
+export interface ConversationResponse {
+  conversation_id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: Array<Record<string, unknown>>;
+  metadata: Record<string, unknown>;
+}
+
+export interface ConversationCreateRequest {
+  title?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export interface ConversationUpdateRequest {
+  title?: string;
+  messages?: Array<Record<string, unknown>>;
+  metadata?: Record<string, unknown>;
 }

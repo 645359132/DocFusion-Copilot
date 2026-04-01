@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 
 from app.core.container import get_container
 from app.schemas.common import BlockResponse, DocumentResponse, FactResponse
@@ -76,6 +79,18 @@ async def upload_document_batch(
     return DocumentBatchUploadAcceptedResponse(document_set_id=resolved_document_set_id, items=items)
 
 
+@router.delete("/{doc_id}")
+def delete_document(doc_id: str) -> dict:
+    """删除文档及其关联的 Block、Fact 和物理文件。
+    Delete a document and cascade-remove its blocks, facts and stored file.
+    """
+    try:
+        doc = get_container().document_service.delete_document(doc_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"doc_id": doc.doc_id, "deleted": True}
+
+
 @router.get("", response_model=list[DocumentResponse])
 def list_documents() -> list[DocumentResponse]:
     """列出后端仓储当前已知的全部文档。
@@ -128,3 +143,30 @@ def get_document_facts(
         min_confidence=min_confidence,
     )
     return [FactResponse.model_validate(fact) for fact in facts]
+
+
+@router.get("/{doc_id}/raw")
+def get_document_raw(doc_id: str):
+    """返回上传的原始文件。
+    Return the raw uploaded file for in-browser preview or download.
+    """
+    document = get_container().document_service.get_document(doc_id)
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document not found.")
+    stored = Path(document.stored_path)
+    uploads_dir = get_container().settings.uploads_dir
+    if not stored.exists() or not str(stored.resolve()).startswith(str(uploads_dir.resolve())):
+        raise HTTPException(status_code=404, detail="File not found on disk.")
+    media_types = {
+        ".txt": "text/plain; charset=utf-8",
+        ".md": "text/markdown; charset=utf-8",
+        ".pdf": "application/pdf",
+        ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    }
+    suffix = stored.suffix.lower()
+    return FileResponse(
+        path=stored,
+        media_type=media_types.get(suffix, "application/octet-stream"),
+        filename=document.file_name,
+    )

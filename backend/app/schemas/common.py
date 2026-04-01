@@ -92,6 +92,7 @@ class FilledCellResponse(APIModel):
     value: str | float | int
     fact_id: str
     confidence: float
+    evidence_text: str = ""
 
 
 class TemplateResultResponse(APIModel):

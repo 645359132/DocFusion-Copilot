@@ -6,6 +6,7 @@ from app.models.domain import DocumentBlock
 from app.parsers.base import DocumentParser
 from app.parsers.docx_parser import DocxParser
 from app.parsers.markdown_parser import MarkdownParser
+from app.parsers.pdf_parser import PdfParser
 from app.parsers.text_parser import PlainTextParser
 from app.parsers.xlsx_parser import XlsxParser
 
@@ -22,6 +23,7 @@ class ParserRegistry:
         self._parsers: list[DocumentParser] = [
             DocxParser(),
             MarkdownParser(),
+            PdfParser(),
             PlainTextParser(),
             XlsxParser(),
         ]

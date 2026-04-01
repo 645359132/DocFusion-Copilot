@@ -98,11 +98,14 @@ def compare_filled_templates(
     accuracy = matched_cells / total_cells if total_cells else 1.0
     mismatches = [item for item in comparison_rows if not item["matched"]][:50]
 
+    error_counts = _classify_errors(mismatches)
+
     return {
         "total_compared_cells": total_cells,
         "matched_cells": matched_cells,
         "accuracy": round(accuracy, 4),
         "meets_threshold_0_80": accuracy >= 0.8,
+        "error_counts": error_counts,
         "mismatches": mismatches,
     }
 
@@ -298,12 +301,16 @@ def _build_cell_comparison(location: str, expected_value: object, actual_value: 
     """构建单个单元格对比结果。    Build one cell-comparison result item."""
 
     matched = _values_equal(expected_value, actual_value)
-    return {
+    error_type = _classify_cell_error(expected_value, actual_value) if not matched else None
+    result: dict[str, object] = {
         "location": location,
         "expected_value": str(expected_value),
         "actual_value": str(actual_value),
         "matched": matched,
     }
+    if error_type:
+        result["error_type"] = error_type
+    return result
 
 
 def _values_equal(expected_value: object, actual_value: object) -> bool:
@@ -356,3 +363,122 @@ def _as_optional_int(value: object) -> int | None:
         return int(candidate)
     except ValueError:
         return None
+
+
+# ---------- Error classification ----------
+
+_UNIT_FACTORS = {
+    (1e4, "万"): True,
+    (1e8, "亿"): True,
+    (1e12, "万亿"): True,
+    (1e2, "%"): True,
+}
+
+
+def _classify_cell_error(expected_value: object, actual_value: object) -> str:
+    """将单元格不匹配归类为具体错误类型。    Classify a cell mismatch into a specific error type."""
+
+    actual_text = _normalize_text(str(actual_value))
+    if not actual_text:
+        return "empty_actual"
+
+    expected_num = _as_optional_float(expected_value)
+    actual_num = _as_optional_float(actual_value)
+
+    if expected_num is not None and actual_num is not None:
+        if expected_num != 0:
+            ratio = actual_num / expected_num
+            for factor, _ in _UNIT_FACTORS:
+                if math.isclose(ratio, factor, rel_tol=1e-3) or math.isclose(ratio, 1.0 / factor, rel_tol=1e-3):
+                    return "unit_conversion_error"
+        return "numeric_mismatch"
+
+    return "text_mismatch"
+
+
+def _classify_errors(mismatches: list[dict[str, object]]) -> dict[str, int]:
+    """统计各错误类型数量。    Count occurrences of each error type."""
+
+    counts: dict[str, int] = {}
+    for item in mismatches:
+        error_type = str(item.get("error_type", "unknown"))
+        counts[error_type] = counts.get(error_type, 0) + 1
+    return counts
+
+
+# ---------- Markdown report generation ----------
+
+
+def generate_benchmark_markdown(report: dict[str, object]) -> str:
+    """将 benchmark JSON 报告转换为 Markdown 格式。    Convert a benchmark JSON report into Markdown format."""
+
+    lines: list[str] = []
+    task_type = str(report.get("task_type", "unknown"))
+    lines.append(f"# 评测报告 — {task_type}")
+    lines.append("")
+    lines.append(f"- **任务 ID**: `{report.get('task_id', 'N/A')}`")
+    lines.append(f"- **耗时**: {report.get('elapsed_seconds', 'N/A')} 秒")
+
+    if task_type == "evaluate_facts":
+        lines.append(f"- **期望事实数**: {report.get('expected_count', 0)}")
+        lines.append(f"- **预测事实数**: {report.get('predicted_count', 0)}")
+        lines.append(f"- **匹配数**: {report.get('matched_count', 0)}")
+        lines.append(f"- **准确率**: {report.get('accuracy', 0)}")
+        lines.append(f"- **精确率**: {report.get('precision', 0)}")
+        lines.append(f"- **召回率**: {report.get('recall', 0)}")
+        lines.append(f"- **F1**: {report.get('f1', 0)}")
+        lines.append(f"- **达标 (≥0.80)**: {'✅' if report.get('meets_threshold_0_80') else '❌'}")
+        per_field = report.get("per_field")
+        if isinstance(per_field, dict) and per_field:
+            lines.append("")
+            lines.append("## 按字段统计")
+            lines.append("")
+            lines.append("| 字段 | 期望 | 预测 | 匹配 | 准确率 | 精确率 |")
+            lines.append("|------|------|------|------|--------|--------|")
+            for field_name, stats in per_field.items():
+                if isinstance(stats, dict):
+                    lines.append(
+                        f"| {field_name} | {stats.get('expected', 0)} | {stats.get('predicted', 0)} "
+                        f"| {stats.get('matched', 0)} | {stats.get('accuracy', 0)} | {stats.get('precision', 0)} |"
+                    )
+    elif task_type == "benchmark_template_fill":
+        lines.append(f"- **模板**: {report.get('template_name', 'N/A')}")
+        lines.append(f"- **比较单元格数**: {report.get('total_compared_cells', 0)}")
+        lines.append(f"- **匹配单元格数**: {report.get('matched_cells', 0)}")
+        lines.append(f"- **准确率**: {report.get('accuracy', 0)}")
+        lines.append(f"- **达标 (≥0.80)**: {'✅' if report.get('meets_threshold_0_80') else '❌'}")
+        error_counts = report.get("error_counts")
+        if isinstance(error_counts, dict) and error_counts:
+            lines.append("")
+            lines.append("## 误差分类")
+            lines.append("")
+            lines.append("| 错误类型 | 数量 |")
+            lines.append("|----------|------|")
+            _ERROR_TYPE_LABELS = {
+                "empty_actual": "未填写 (空值)",
+                "numeric_mismatch": "数值错误",
+                "unit_conversion_error": "单位换算错误",
+                "text_mismatch": "文本不匹配",
+                "unknown": "未知",
+            }
+            for etype, count in error_counts.items():
+                label = _ERROR_TYPE_LABELS.get(etype, etype)
+                lines.append(f"| {label} | {count} |")
+
+    mismatches = report.get("mismatches")
+    if isinstance(mismatches, list) and mismatches:
+        lines.append("")
+        lines.append("## 不匹配明细（前 50 条）")
+        lines.append("")
+        lines.append("| 位置 | 期望值 | 实际值 | 类型 |")
+        lines.append("|------|--------|--------|------|")
+        for item in mismatches[:50]:
+            if isinstance(item, dict):
+                loc = item.get("location", item.get("kind", ""))
+                expected = str(item.get("expected_value", item.get("value_text", "")))[:40]
+                actual = str(item.get("actual_value", ""))[:40]
+                etype = item.get("error_type", item.get("kind", ""))
+                lines.append(f"| {loc} | {expected} | {actual} | {etype} |")
+
+    lines.append("")
+    return "\n".join(lines)

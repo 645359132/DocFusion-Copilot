@@ -5,6 +5,7 @@ from collections import OrderedDict
 from dataclasses import replace
 
 from app.core.catalog import FIELD_ALIASES, FIELD_CANONICAL_UNITS, FIELD_ENTITY_TYPES
+from app.core.logging import ErrorCode, get_logger, log_operation
 from app.models.domain import DocumentBlock, DocumentRecord, FactRecord
 from app.utils.ids import new_id
 from app.utils.normalizers import (
@@ -29,16 +30,25 @@ _TEXT_VALUE_RE = re.compile(r"(?:为|是|:|：)\s*(?P<value>[^，。；;\n]{2,40
 class FactExtractionService:
     """从标准化文档块中抽取结构化事实。    Extract structured facts from normalized document blocks."""
 
+    _logger = get_logger("fact_extraction")
+
     def extract(self, document: DocumentRecord, blocks: list[DocumentBlock]) -> list[FactRecord]:
         """执行块级抽取并返回去重后的事实列表。    Run block-level extraction and return deduplicated facts."""
 
-        facts: list[FactRecord] = []
-        for block in blocks:
-            if block.block_type == "table_row":
-                facts.extend(self._extract_from_table_row(document, block))
-                continue
-            facts.extend(self._extract_from_text(document, block))
-        return list(self._deduplicate(facts).values())
+        with log_operation(self._logger, "fact_extract", doc_id=document.doc_id):
+            facts: list[FactRecord] = []
+            for block in blocks:
+                if block.block_type == "table_row":
+                    facts.extend(self._extract_from_table_row(document, block))
+                    continue
+                facts.extend(self._extract_from_text(document, block))
+            result = list(self._deduplicate(facts).values())
+            if not result:
+                self._logger.warning(
+                    "No facts extracted",
+                    extra={"doc_id": document.doc_id, "error_code": ErrorCode.EXTRACT_NO_FACTS},
+                )
+            return result
 
     def _extract_from_table_row(self, document: DocumentRecord, block: DocumentBlock) -> list[FactRecord]:
         """从标准化表格行块中抽取事实。    Extract facts from a normalized table row block."""

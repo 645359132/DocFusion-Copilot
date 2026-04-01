@@ -78,6 +78,18 @@ class DocumentService:
         self._executor.submit(task.task_id, self._process_document, document.doc_id, stored_path, task.task_id)
         return document, task
 
+    def delete_document(self, doc_id: str) -> DocumentRecord:
+        """删除文档及其关联数据，同时清理物理文件。
+        Delete a document, cascade-remove associated data and clean up the stored file.
+        """
+        record = self._repository.delete_document(doc_id)
+        if record is None:
+            raise ValueError(f"Document not found: {doc_id}")
+        stored = Path(record.stored_path)
+        if stored.exists():
+            stored.unlink(missing_ok=True)
+        return record
+
     def list_documents(self) -> list[DocumentRecord]:
         """返回仓储中当前全部文档。
         Return all documents currently stored in the repository.

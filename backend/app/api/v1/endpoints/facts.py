@@ -33,6 +33,19 @@ def list_facts(
     return [FactResponse.model_validate(fact) for fact in facts]
 
 
+@router.get("/low-confidence", response_model=list[FactResponse])
+def list_low_confidence_facts(
+    threshold: float = Query(default=0.7, ge=0.0, le=1.0),
+    canonical_only: bool = Query(default=True),
+) -> list[FactResponse]:
+    """筛选低置信度事实列表。
+    List facts with confidence below the given threshold.
+    """
+    facts = get_container().repository.list_facts(canonical_only=canonical_only)
+    low = [f for f in facts if f.confidence < threshold]
+    return [FactResponse.model_validate(fact) for fact in low]
+
+
 @router.patch("/{fact_id}/review", response_model=FactResponse)
 def review_fact(fact_id: str, payload: FactReviewRequest) -> FactResponse:
     """提交事实复核结果并返回更新后的事实。    Submit a fact review decision and return the updated fact."""
