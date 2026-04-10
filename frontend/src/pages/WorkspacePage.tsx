@@ -148,7 +148,7 @@ export default function WorkspacePage() {
   return (
     <ResizablePanelGroup className="h-full">
       {/* ── Left: File Tree ── */}
-      <ResizablePanel defaultSize={20} minSize={12}>
+      <ResizablePanel defaultSize={22} minSize={12}>
       <div className="flex h-full flex-col bg-card">
         <div className="flex items-center justify-between border-b px-3 py-2">
           <span className="text-sm font-medium flex items-center gap-1.5">
@@ -193,7 +193,7 @@ export default function WorkspacePage() {
         <Separator />
 
         {/* File list */}
-        <ScrollArea className="flex-1">
+        <div className="flex-1 overflow-y-auto overflow-x-hidden">
           <div className="p-2 space-y-0.5">
             {documents.length === 0 && (
               <p className="px-2 py-4 text-center text-xs text-muted-foreground">暂无文档</p>
@@ -210,7 +210,7 @@ export default function WorkspacePage() {
             {documents.map((doc) => (
               <div
                 key={doc.doc_id}
-                className={`group flex w-full min-w-0 items-center gap-1.5 overflow-hidden rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted ${
+                className={`flex w-full min-w-0 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm transition-colors hover:bg-muted ${
                   selectedDocId === doc.doc_id ? 'bg-muted font-medium' : ''
                 }`}
               >
@@ -235,7 +235,7 @@ export default function WorkspacePage() {
                 <span
                   role="button"
                   tabIndex={0}
-                  className="shrink-0 rounded p-0.5 text-muted-foreground opacity-0 transition-opacity hover:text-destructive group-hover:opacity-100"
+                  className="shrink-0 rounded p-0.5 text-muted-foreground/40 hover:text-destructive transition-colors"
                   onClick={(e) => {
                     e.stopPropagation();
                     handleDelete(doc.doc_id, doc.file_name);
@@ -252,7 +252,7 @@ export default function WorkspacePage() {
               </div>
             ))}
           </div>
-        </ScrollArea>
+        </div>
 
         {currentDocumentSetId && (
           <div className="border-t px-3 py-1.5 text-[10px] text-muted-foreground truncate">
@@ -265,7 +265,7 @@ export default function WorkspacePage() {
       <ResizableHandle withHandle />
 
       {/* ── Middle: Document Preview ── */}
-      <ResizablePanel defaultSize={50} minSize={25}>
+      <ResizablePanel defaultSize={48} minSize={25}>
       <div className="flex h-full flex-col">
         <div className="flex items-center gap-2 border-b px-4 py-2">
           <Eye className="h-4 w-4 text-muted-foreground" />
